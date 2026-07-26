@@ -34,6 +34,21 @@ export async function ensureQdrantCollection(): Promise<void> {
   console.log(`Created Qdrant collection "${QDRANT_COLLECTION}"`);
 }
 
+export type ChunkPointPayload = {
+  notebookId: string;
+  sourceId: string;
+  chunkId: string;
+  text: string;
+  locator?: {
+    page?: number;
+    startChar?: number;
+    endChar?: number;
+    startMs?: number;
+    endMs?: number;
+    url?: string;
+  };
+};
+
 /** Delete all vector points belonging to a notebook (isolation cleanup). */
 export async function deletePointsByNotebookId(notebookId: string): Promise<void> {
   await qdrant.delete(QDRANT_COLLECTION, {
@@ -46,5 +61,39 @@ export async function deletePointsByNotebookId(notebookId: string): Promise<void
         },
       ],
     },
+  });
+}
+
+/** Delete all vector points belonging to a source (reindex / delete cleanup). */
+export async function deletePointsBySourceId(sourceId: string): Promise<void> {
+  await qdrant.delete(QDRANT_COLLECTION, {
+    wait: true,
+    filter: {
+      must: [
+        {
+          key: "sourceId",
+          match: { value: sourceId },
+        },
+      ],
+    },
+  });
+}
+
+export async function upsertChunkPoints(
+  points: Array<{
+    id: string;
+    vector: number[];
+    payload: ChunkPointPayload;
+  }>,
+): Promise<void> {
+  if (points.length === 0) return;
+
+  await qdrant.upsert(QDRANT_COLLECTION, {
+    wait: true,
+    points: points.map((p) => ({
+      id: p.id,
+      vector: p.vector,
+      payload: p.payload,
+    })),
   });
 }

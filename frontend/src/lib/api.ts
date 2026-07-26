@@ -23,11 +23,14 @@ export async function apiFetch<T>(
   options: RequestInit & { token?: string | null } = {},
 ): Promise<T> {
   const { token, headers, ...rest } = options;
+  const isFormData =
+    typeof FormData !== "undefined" && rest.body instanceof FormData;
 
   const res = await fetch(getApiUrl(path), {
     ...rest,
     headers: {
-      "Content-Type": "application/json",
+      // Let the browser set multipart boundary for FormData uploads.
+      ...(isFormData ? {} : { "Content-Type": "application/json" }),
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...headers,
     },
@@ -35,7 +38,14 @@ export async function apiFetch<T>(
 
   if (!res.ok) {
     const body = await res.text().catch(() => "");
-    throw new ApiError(res.status, body || `Request failed: ${res.status}`);
+    let message = body || `Request failed: ${res.status}`;
+    try {
+      const parsed = JSON.parse(body) as { error?: string };
+      if (parsed?.error) message = parsed.error;
+    } catch {
+      // keep raw body
+    }
+    throw new ApiError(res.status, message);
   }
 
   if (res.status === 204) {

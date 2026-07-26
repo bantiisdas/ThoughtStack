@@ -3,10 +3,15 @@
 import { useAuth } from "@clerk/nextjs";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { AppHeader } from "@/components/AppHeader";
+import { SourceStatusBadge } from "@/components/SourceStatusBadge";
 import { getNotebook, updateNotebook } from "@/lib/notebooks";
-import type { Notebook } from "@/lib/types";
+import { uploadTextSource } from "@/lib/sources";
+import type { Notebook, SourceStatus } from "@/lib/types";
+
+const IN_FLIGHT: SourceStatus[] = ["UPLOADING", "INDEXING"];
+const POLL_MS = 2500;
 
 export default function NotebookWorkspacePage() {
   const params = useParams<{ id: string }>();
@@ -20,30 +25,53 @@ export default function NotebookWorkspacePage() {
   const [titleDraft, setTitleDraft] = useState("");
   const [savingTitle, setSavingTitle] = useState(false);
   const [question, setQuestion] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const load = useCallback(async () => {
-    setError(null);
-    try {
-      const token = await getToken();
-      if (!token) {
-        setError("Not authenticated");
-        return;
+  const load = useCallback(
+    async (opts?: { quiet?: boolean }) => {
+      if (!opts?.quiet) {
+        setError(null);
       }
-      const data = await getNotebook(token, notebookId);
-      setNotebook(data.notebook);
-      setTitleDraft(data.notebook.title);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load notebook");
-      setNotebook(null);
-    } finally {
-      setLoading(false);
-    }
-  }, [getToken, notebookId]);
+      try {
+        const token = await getToken();
+        if (!token) {
+          setError("Not authenticated");
+          return;
+        }
+        const data = await getNotebook(token, notebookId);
+        setNotebook(data.notebook);
+        setTitleDraft(data.notebook.title);
+      } catch (err) {
+        if (!opts?.quiet) {
+          setError(err instanceof Error ? err.message : "Failed to load notebook");
+          setNotebook(null);
+        }
+      } finally {
+        if (!opts?.quiet) {
+          setLoading(false);
+        }
+      }
+    },
+    [getToken, notebookId],
+  );
 
   useEffect(() => {
     if (!isLoaded || !notebookId) return;
     void load();
   }, [isLoaded, notebookId, load]);
+
+  const sources = notebook?.sources ?? [];
+  const hasInFlight = sources.some((s) => IN_FLIGHT.includes(s.status));
+
+  // Poll while any source is still uploading/indexing.
+  useEffect(() => {
+    if (!hasInFlight || !isLoaded) return;
+    const id = window.setInterval(() => {
+      void load({ quiet: true });
+    }, POLL_MS);
+    return () => window.clearInterval(id);
+  }, [hasInFlight, isLoaded, load]);
 
   async function handleRename(e: FormEvent) {
     e.preventDefault();
@@ -74,7 +102,33 @@ export default function NotebookWorkspacePage() {
     }
   }
 
-  const sources = notebook?.sources ?? [];
+  async function handleTextUpload(file: File | null) {
+    if (!file || !notebook || uploading) return;
+
+    setUploading(true);
+    setError(null);
+    try {
+      const token = await getToken();
+      if (!token) throw new Error("Not authenticated");
+      const { source } = await uploadTextSource(token, notebook.id, file);
+      setNotebook((prev) => {
+        if (!prev) return prev;
+        const existing = prev.sources ?? [];
+        return {
+          ...prev,
+          sources: [source, ...existing.filter((s) => s.id !== source.id)],
+        };
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to upload text file");
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+    }
+  }
+
   const readyCount = sources.filter((s) => s.status === "READY").length;
 
   return (
@@ -158,13 +212,22 @@ export default function NotebookWorkspacePage() {
             </div>
 
             <div className="flex flex-wrap gap-2 px-4 pb-3">
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".txt,.text,.md,text/plain,text/markdown,text/*"
+                className="hidden"
+                onChange={(e) => {
+                  void handleTextUpload(e.target.files?.[0] ?? null);
+                }}
+              />
               <button
                 type="button"
-                disabled
-                title="Coming in a later phase"
-                className="rounded-md border border-[#d6d3d1] bg-white px-2.5 py-1.5 text-xs text-[#a8a29e]"
+                disabled={uploading}
+                onClick={() => fileInputRef.current?.click()}
+                className="rounded-md border border-[#d6d3d1] bg-white px-2.5 py-1.5 text-xs text-[#1c1917] transition hover:border-[#a8a29e] hover:bg-[#fafaf9] disabled:cursor-not-allowed disabled:text-[#a8a29e]"
               >
-                Upload file
+                {uploading ? "Uploading…" : "Upload text"}
               </button>
               <button
                 type="button"
@@ -181,7 +244,7 @@ export default function NotebookWorkspacePage() {
                 <div className="rounded-md border border-dashed border-[#d6d3d1] px-3 py-8 text-center text-xs leading-relaxed text-[#78716c]">
                   No sources yet.
                   <br />
-                  Upload and URL ingest land in the next phases.
+                  Upload a .txt file to start indexing.
                 </div>
               ) : (
                 <ul className="space-y-2">
@@ -190,12 +253,21 @@ export default function NotebookWorkspacePage() {
                       key={source.id}
                       className="rounded-md border border-[#e7e5e4] bg-white/60 px-3 py-2"
                     >
-                      <p className="truncate text-sm font-medium text-[#1c1917]">
-                        {source.title}
-                      </p>
+                      <div className="flex items-start justify-between gap-2">
+                        <p className="truncate text-sm font-medium text-[#1c1917]">
+                          {source.title}
+                        </p>
+                        <SourceStatusBadge status={source.status} />
+                      </div>
                       <p className="mt-0.5 text-xs text-[#78716c]">
-                        {source.type} · {source.status}
+                        {source.type}
+                        {source.originalName ? ` · ${source.originalName}` : ""}
                       </p>
+                      {source.status === "FAILED" && source.errorMessage ? (
+                        <p className="mt-1 text-xs leading-snug text-red-700">
+                          {source.errorMessage}
+                        </p>
+                      ) : null}
                     </li>
                   ))}
                 </ul>

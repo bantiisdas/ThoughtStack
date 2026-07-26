@@ -1,0 +1,111 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum SourceType {
+  PDF
+  TEXT
+  WEBSITE
+  YOUTUBE
+  VTT
+}
+
+enum SourceStatus {
+  UPLOADING
+  INDEXING
+  READY
+  FAILED
+}
+
+model User {
+  id        String     @id @default(cuid())
+  clerkId   String     @unique
+  email     String?
+  name      String?
+  notebooks Notebook[]
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+}
+
+model Notebook {
+  id          String         @id @default(cuid())
+  userId      String
+  user        User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title       String
+  description String?
+  sources     Source[]
+  chunks      Chunk[]
+  conversations Conversation[]
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  @@index([userId])
+}
+
+model Source {
+  id           String       @id @default(cuid())
+  notebookId   String
+  notebook     Notebook     @relation(fields: [notebookId], references: [id], onDelete: Cascade)
+  type         SourceType
+  title        String
+  status       SourceStatus @default(UPLOADING)
+  errorMessage String?
+  originalName String?
+  mimeType     String?
+  storagePath  String?
+  url          String?
+  metadata     Json?
+  chunks       Chunk[]
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  @@index([notebookId])
+  @@index([status])
+}
+
+model Chunk {
+  id            String   @id @default(cuid())
+  sourceId      String
+  source        Source   @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  notebookId    String
+  notebook      Notebook @relation(fields: [notebookId], references: [id], onDelete: Cascade)
+  index         Int
+  content       String
+  locator       Json?
+  qdrantPointId String?
+  createdAt     DateTime @default(now())
+
+  @@index([sourceId])
+  @@index([notebookId])
+}
+
+model Conversation {
+  id         String    @id @default(cuid())
+  notebookId String
+  notebook   Notebook  @relation(fields: [notebookId], references: [id], onDelete: Cascade)
+  title      String?
+  messages   Message[]
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@index([notebookId])
+}
+
+model Message {
+  id             String       @id @default(cuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  role           String
+  content        String
+  citations      Json?
+  meta           Json?
+  createdAt      DateTime     @default(now())
+
+  @@index([conversationId])
+}

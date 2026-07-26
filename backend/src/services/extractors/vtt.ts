@@ -20,7 +20,9 @@ const webvtt = require("node-webvtt") as {
   };
 };
 
-export async function extractVtt(storagePath: string): Promise<ExtractedDocument> {
+export async function extractVtt(
+  storagePath: string,
+): Promise<ExtractedDocument> {
   const absolute = path.resolve(process.cwd(), storagePath);
   const raw = await fs.readFile(absolute, "utf8");
   if (!raw.trim()) {

@@ -87,7 +87,9 @@ export default function NotebookWorkspacePage() {
   const [urlOpen, setUrlOpen] = useState(false);
   const [urlValue, setUrlValue] = useState("");
   const [urlTitle, setUrlTitle] = useState("");
-  const [urlType, setUrlType] = useState<"auto" | "WEBSITE" | "YOUTUBE">("auto");
+  const [urlType, setUrlType] = useState<"auto" | "WEBSITE" | "YOUTUBE">(
+    "auto",
+  );
   const [addingUrl, setAddingUrl] = useState(false);
   const [busySourceId, setBusySourceId] = useState<string | null>(null);
   const [pendingDeleteSource, setPendingDeleteSource] = useState<{
@@ -135,7 +137,9 @@ export default function NotebookWorkspacePage() {
         setTitleDraft(data.notebook.title);
       } catch (err) {
         if (!opts?.quiet) {
-          setError(err instanceof Error ? err.message : "Failed to load notebook");
+          setError(
+            err instanceof Error ? err.message : "Failed to load notebook",
+          );
           setNotebook(null);
         }
       } finally {
@@ -241,11 +245,15 @@ export default function NotebookWorkspacePage() {
         title: next,
       });
       setNotebook((prev) =>
-        prev ? { ...prev, title: updated.title, updatedAt: updated.updatedAt } : updated,
+        prev
+          ? { ...prev, title: updated.title, updatedAt: updated.updatedAt }
+          : updated,
       );
       setEditingTitle(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to rename notebook");
+      setError(
+        err instanceof Error ? err.message : "Failed to rename notebook",
+      );
     } finally {
       setSavingTitle(false);
     }
@@ -450,7 +458,10 @@ export default function NotebookWorkspacePage() {
           />
         ) : notebook ? (
           editingTitle ? (
-            <form onSubmit={handleRename} className="flex min-w-0 flex-1 items-center gap-2">
+            <form
+              onSubmit={handleRename}
+              className="flex min-w-0 flex-1 items-center gap-2"
+            >
               <input
                 autoFocus
                 value={titleDraft}
@@ -500,7 +511,9 @@ export default function NotebookWorkspacePage() {
       ) : null}
 
       {!loading && !notebook && !error ? (
-        <p className="mx-auto mt-16 text-sm text-[#78716c]">Notebook not found.</p>
+        <p className="mx-auto mt-16 text-sm text-[#78716c]">
+          Notebook not found.
+        </p>
       ) : null}
 
       {notebook ? (
@@ -583,7 +596,9 @@ export default function NotebookWorkspacePage() {
                   <select
                     value={urlType}
                     onChange={(e) =>
-                      setUrlType(e.target.value as "auto" | "WEBSITE" | "YOUTUBE")
+                      setUrlType(
+                        e.target.value as "auto" | "WEBSITE" | "YOUTUBE",
+                      )
                     }
                     className="mt-1 w-full rounded-md border border-[#d6d3d1] bg-white px-2 py-1.5 text-sm outline-none ring-[#2f4f3a] focus:ring-2"
                   >
@@ -607,7 +622,8 @@ export default function NotebookWorkspacePage() {
                 <div className="rounded-md border border-dashed border-[#d6d3d1] px-3 py-8 text-center text-xs leading-relaxed text-[#78716c]">
                   No sources yet.
                   <br />
-                  Upload a text, PDF, or VTT file — or add a website / YouTube URL.
+                  Upload a text, PDF, or VTT file — or add a website / YouTube
+                  URL.
                 </div>
               ) : (
                 <ul className="space-y-2">
@@ -704,9 +720,7 @@ export default function NotebookWorkspacePage() {
               </h2>
               <p className="mt-1 text-xs text-[#78716c]">
                 Ask questions once at least one source is ready.
-                {readyCount > 0
-                  ? ` ${readyCount} ready.`
-                  : " None ready yet."}
+                {readyCount > 0 ? ` ${readyCount} ready.` : " None ready yet."}
               </p>
             </div>
 
@@ -810,9 +824,7 @@ export default function NotebookWorkspacePage() {
                 />
                 <button
                   type="submit"
-                  disabled={
-                    readyCount === 0 || !question.trim() || asking
-                  }
+                  disabled={readyCount === 0 || !question.trim() || asking}
                   className="rounded-md bg-[#2f4f3a] px-4 py-2.5 text-sm font-medium text-[#f4f7f4] transition hover:bg-[#243d2d] disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {asking ? "…" : "Ask"}

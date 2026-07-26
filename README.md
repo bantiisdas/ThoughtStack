@@ -19,9 +19,11 @@ Apps are **separate packages** (no monorepo tooling). Install and run each indep
 ThoughtStack/
 ├── frontend/           # Next.js UI (Clerk)
 ├── backend/            # Express API + BullMQ worker
-├── docker-compose.yml  # redis + qdrant only
+├── Caddyfile           # HTTPS reverse proxy for the API
+├── docker-compose.yml  # redis + qdrant + api + worker + caddy
 └── README.md
 ```
+
 
 ## Prerequisites
 
@@ -211,9 +213,41 @@ Optional talking points while demos run:
 - Query path uses step-back + rewrite + sub-queries (one structured LLM call), HyDE, parallel dense search, RRF fusion, grounded answer, grader score /10 with up to 3 attempts.
 - Chat shows grade + attempt count under assistant messages for debugging.
 
+## Deploy API with HTTPS (Caddy)
+
+Vercel (HTTPS) cannot call a plain `http://IP:4000` API (mixed content). Use Caddy in Compose for Let’s Encrypt TLS.
+
+1. Point a DNS **A** record (e.g. `api.yourdomain.com`) at your VPS. Open ports **80** and **443**.
+2. On the server, create root `.env` (see `.env.example`):
+
+```bash
+cp .env.example .env
+# API_DOMAIN=api.yourdomain.com
+# ACME_EMAIL=you@example.com
+```
+
+3. Set `backend/.env` with production values, especially:
+
+```env
+CORS_ORIGIN=https://thought-stack-ai.vercel.app
+```
+
+4. Start the stack **with the HTTPS profile** (enables Caddy):
+
+```bash
+docker compose pull
+docker compose --profile https up -d
+docker compose logs -f caddy
+```
+
+5. Check `https://api.yourdomain.com/health`.
+
+6. On Vercel, set `NEXT_PUBLIC_API_URL=https://api.yourdomain.com` and redeploy the frontend.
+
 ## Notes
 
 - Local uploads live in `backend/uploads/` (gitignored).
 - Install backend deps with `--legacy-peer-deps` if npm reports LangChain optional-peer conflicts (an `.npmrc` is included).
 - Run `npx prisma migrate dev` only after `DATABASE_URL` / `DIRECT_URL` point at a real Neon database.
 - Frontend `README.md` is the stock Next.js file; use this root README for product setup.
+- Production HTTPS: `docker compose --profile https up -d` (needs root `.env` with `API_DOMAIN` + `ACME_EMAIL`).

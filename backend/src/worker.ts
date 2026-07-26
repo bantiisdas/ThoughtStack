@@ -60,9 +60,7 @@ async function main() {
   process.on("SIGINT", () => void shutdown());
   process.on("SIGTERM", () => void shutdown());
 
-  console.log(
-    `ThoughtStack worker listening on queue "${SOURCE_INDEX_QUEUE}"`,
-  );
+  console.log(`ThoughtStack worker listening on queue "${SOURCE_INDEX_QUEUE}"`);
 }
 
 main().catch((error) => {

@@ -8,7 +8,9 @@ export const qdrant = new QdrantClient({ url: env.QDRANT_URL });
 
 export async function ensureQdrantCollection(): Promise<void> {
   const collections = await qdrant.getCollections();
-  const exists = collections.collections.some((c) => c.name === QDRANT_COLLECTION);
+  const exists = collections.collections.some(
+    (c) => c.name === QDRANT_COLLECTION,
+  );
 
   if (exists) {
     return;
@@ -50,7 +52,9 @@ export type ChunkPointPayload = {
 };
 
 /** Delete all vector points belonging to a notebook (isolation cleanup). */
-export async function deletePointsByNotebookId(notebookId: string): Promise<void> {
+export async function deletePointsByNotebookId(
+  notebookId: string,
+): Promise<void> {
   await qdrant.delete(QDRANT_COLLECTION, {
     wait: true,
     filter: {

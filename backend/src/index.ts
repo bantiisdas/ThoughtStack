@@ -14,12 +14,21 @@ import { sourcesRouter } from "./routes/sources.js";
 
 const app = express();
 
+// Trust Caddy / reverse-proxy X-Forwarded-* headers
+app.set("trust proxy", 1);
+
+const corsOrigins = env.CORS_ORIGIN.split(",")
+  .map((o) => o.trim())
+  .filter(Boolean);
+
 app.use(
   cors({
-    origin: env.CORS_ORIGIN,
+    origin: corsOrigins.length === 1 ? corsOrigins[0] : corsOrigins,
     credentials: true,
   }),
 );
+
+console.log(`CORS allowed origins: ${corsOrigins.join(", ")}`);
 app.use(express.json({ limit: "2mb" }));
 app.use(clerkMiddleware());
 

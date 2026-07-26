@@ -49,10 +49,10 @@ export async function extractYoutube(url: string): Promise<ExtractedDocument> {
     cues = await fetchTranscript(videoId);
   } catch (error) {
     const message =
-      error instanceof Error ? error.message : "Failed to fetch YouTube transcript";
-    throw new Error(
-      `YouTube captions unavailable for ${videoId}: ${message}`,
-    );
+      error instanceof Error
+        ? error.message
+        : "Failed to fetch YouTube transcript";
+    throw new Error(`YouTube captions unavailable for ${videoId}: ${message}`);
   }
 
   if (!cues.length) {

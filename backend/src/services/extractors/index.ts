@@ -4,7 +4,11 @@ import { extractText } from "./text.js";
 import { extractVtt } from "./vtt.js";
 import { extractWebsite } from "./website.js";
 import { extractYoutube } from "./youtube.js";
-import type { ChunkLocator, ExtractedDocument, ExtractedSegment } from "./types.js";
+import type {
+  ChunkLocator,
+  ExtractedDocument,
+  ExtractedSegment,
+} from "./types.js";
 
 export type { ChunkLocator, ExtractedDocument, ExtractedSegment };
 
@@ -14,10 +18,13 @@ type SourceLike = {
   url: string | null;
 };
 
-export async function extractSource(source: SourceLike): Promise<ExtractedDocument> {
+export async function extractSource(
+  source: SourceLike,
+): Promise<ExtractedDocument> {
   switch (source.type) {
     case "TEXT": {
-      if (!source.storagePath) throw new Error("TEXT source has no storagePath");
+      if (!source.storagePath)
+        throw new Error("TEXT source has no storagePath");
       return extractText(source.storagePath);
     }
     case "PDF": {
@@ -74,10 +81,7 @@ export function buildSegmentRanges(segments: ExtractedSegment[]): {
   return { fullText: parts.join(""), ranges };
 }
 
-function buildCharLocators(
-  fullText: string,
-  chunks: string[],
-): ChunkLocator[] {
+function buildCharLocators(fullText: string, chunks: string[]): ChunkLocator[] {
   const locators: ChunkLocator[] = [];
   let cursor = 0;
 
@@ -127,7 +131,9 @@ function mergeLocators(
     startChar,
     endChar,
     page: pages[0] ?? primary.locator.page,
-    startMs: startMsList.length ? Math.min(...startMsList) : primary.locator.startMs,
+    startMs: startMsList.length
+      ? Math.min(...startMsList)
+      : primary.locator.startMs,
     endMs: endMsList.length ? Math.max(...endMsList) : primary.locator.endMs,
     url: primary.locator.url,
   };

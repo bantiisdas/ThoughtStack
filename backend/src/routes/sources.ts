@@ -143,7 +143,9 @@ async function findOwnedSource(id: string, userId: string) {
   });
 }
 
-async function assertUnderSourceCap(notebookId: string): Promise<string | null> {
+async function assertUnderSourceCap(
+  notebookId: string,
+): Promise<string | null> {
   const count = await prisma.source.count({ where: { notebookId } });
   if (count >= MAX_SOURCES_PER_NOTEBOOK) {
     return `This notebook already has ${MAX_SOURCES_PER_NOTEBOOK} sources (maximum). Delete one to add another.`;
@@ -176,7 +178,9 @@ sourcesRouter.post(
 
     const file = req.file;
     if (!file) {
-      res.status(400).json({ error: "Missing file field (multipart name: file)" });
+      res
+        .status(400)
+        .json({ error: "Missing file field (multipart name: file)" });
       return;
     }
 
@@ -221,9 +225,15 @@ sourcesRouter.post(
       );
       fs.mkdirSync(notebookDir, { recursive: true });
 
-      const safeName = file.originalname.replace(/[^\w.\-]+/g, "_").slice(0, 80);
+      const safeName = file.originalname
+        .replace(/[^\w.\-]+/g, "_")
+        .slice(0, 80);
       const ext =
-        type === "PDF" ? ".pdf" : type === "VTT" ? ".vtt" : path.extname(safeName) || ".txt";
+        type === "PDF"
+          ? ".pdf"
+          : type === "VTT"
+            ? ".vtt"
+            : path.extname(safeName) || ".txt";
       const filename = `${source.id}-${safeName || `source${ext}`}`;
       const absolutePath = path.join(notebookDir, filename);
       const storagePath = path
@@ -322,7 +332,9 @@ sourcesRouter.post(
       defaultTitle = `YouTube ${videoId}`;
     }
 
-    const title = titleInput?.trim() ? titleInput.trim().slice(0, 200) : defaultTitle;
+    const title = titleInput?.trim()
+      ? titleInput.trim().slice(0, 200)
+      : defaultTitle;
 
     try {
       const source = await prisma.source.create({
@@ -458,7 +470,9 @@ sourcesRouter.get(
       });
     } catch (error) {
       const message =
-        error instanceof Error ? error.message : "Failed to load source content";
+        error instanceof Error
+          ? error.message
+          : "Failed to load source content";
       res.status(500).json({ error: message });
     }
   },

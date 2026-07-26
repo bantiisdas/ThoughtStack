@@ -119,7 +119,9 @@ export function SourceViewer({ token, target, onClose }: Props) {
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        className="flex h-full w-full max-w-xl flex-col border-l border-[#e7e5e4] bg-white shadow-xl"
+        className={`flex h-full w-full flex-col border-l border-[#e7e5e4] bg-white shadow-xl ${
+          sourceType === "PDF" ? "max-w-3xl" : "max-w-xl"
+        }`}
         onClick={(e) => e.stopPropagation()}
       >
         <header className="flex items-start justify-between gap-3 border-b border-[#e7e5e4] px-4 py-3">

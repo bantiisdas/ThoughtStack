@@ -1,0 +1,33 @@
+# ThoughtStack API — HTTPS reverse proxy (Let's Encrypt)
+#
+# Root `.env` next to docker-compose.yml must set:
+#   API_DOMAIN=api.yourdomain.com
+#   ACME_EMAIL=you@example.com
+#
+# DNS: A record for API_DOMAIN → your VPS IP
+# Firewall: allow TCP 80 and 443
+
+{
+	email {$ACME_EMAIL}
+}
+
+{$API_DOMAIN} {
+	encode gzip zstd
+
+	# PDF / VTT uploads up to ~20 MB + JSON
+	request_body {
+		max_size 25MB
+	}
+
+	header {
+		# Helpful when debugging behind TLS
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+	}
+
+	reverse_proxy api:4000 {
+		header_up Host {host}
+		header_up X-Real-IP {remote_host}
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+	}
+}

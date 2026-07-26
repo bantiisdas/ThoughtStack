@@ -19,20 +19,25 @@ services:
     restart: unless-stopped
 
   api:
+    image: supdev20/thoughtstack-backend:v1
     build:
       context: ./backend
       dockerfile: Dockerfile
+    # Published for local/dev. On the VPS, prefer HTTPS via: docker compose --profile https up -d
     ports:
       - "4000:4000"
     env_file:
       - ./backend/.env
     environment:
+      # Override .env localhost — required inside Docker (service DNS names)
       NODE_ENV: production
       PORT: 4000
       REDIS_URL: redis://redis:6379
       QDRANT_URL: http://qdrant:6333
       UPLOAD_DIR: uploads
       RUN_MIGRATIONS: "true"
+      # Prefer root/.env or export; falls back so Vercel is never stuck on localhost
+      CORS_ORIGIN: ${CORS_ORIGIN:-https://thought-stack-ai.vercel.app,http://localhost:3000}
     volumes:
       - backend_uploads:/app/uploads
     depends_on:
@@ -41,6 +46,7 @@ services:
     restart: unless-stopped
 
   worker:
+    image: supdev20/thoughtstack-backend:v1
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -48,6 +54,7 @@ services:
     env_file:
       - ./backend/.env
     environment:
+      # Override .env localhost — required inside Docker (service DNS names)
       NODE_ENV: production
       REDIS_URL: redis://redis:6379
       QDRANT_URL: http://qdrant:6333
@@ -61,7 +68,29 @@ services:
       - api
     restart: unless-stopped
 
+  caddy:
+    profiles: ["https"]
+    image: caddy:2
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    env_file:
+      - ./.env
+    environment:
+      API_DOMAIN: ${API_DOMAIN:?Set API_DOMAIN in root .env for the https profile}
+      ACME_EMAIL: ${ACME_EMAIL:?Set ACME_EMAIL in root .env for the https profile}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - api
+    restart: unless-stopped
+
 volumes:
   redis_data:
   qdrant_data:
   backend_uploads:
+  caddy_data:
+  caddy_config:

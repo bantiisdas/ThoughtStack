@@ -7,6 +7,7 @@ import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { AppHeader } from "@/components/AppHeader";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { ErrorBanner } from "@/components/ErrorBanner";
+import { MarkdownContent } from "@/components/MarkdownContent";
 import {
   SourceViewer,
   type SourceViewerTarget,
@@ -745,13 +746,17 @@ export default function NotebookWorkspacePage() {
                         className={`flex flex-col ${isUser ? "items-end" : "items-start"}`}
                       >
                         <div
-                          className={`max-w-[85%] rounded-md px-3 py-2 text-sm leading-relaxed whitespace-pre-wrap sm:max-w-[75%] ${
+                          className={`max-w-[85%] rounded-md px-3 py-2 text-sm leading-relaxed sm:max-w-[75%] ${
                             isUser
-                              ? "bg-[#2f4f3a] text-[#f4f7f4]"
+                              ? "whitespace-pre-wrap bg-[#2f4f3a] text-[#f4f7f4]"
                               : "w-full max-w-none border border-[#e7e5e4] bg-white text-[#1c1917]"
                           }`}
                         >
-                          {message.content}
+                          {isUser ? (
+                            message.content
+                          ) : (
+                            <MarkdownContent content={message.content} />
+                          )}
                         </div>
                         {!isUser && citations.length > 0 ? (
                           <div className="mt-2 flex w-full flex-wrap gap-1.5">

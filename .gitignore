@@ -37,3 +37,4 @@ Thumbs.db
 *.tsbuildinfo
 next-env.d.ts
 !frontend/next-env.d.ts
+plan.md

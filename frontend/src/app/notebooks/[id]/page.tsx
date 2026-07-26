@@ -5,6 +5,10 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { AppHeader } from "@/components/AppHeader";
+import {
+  SourceViewer,
+  type SourceViewerTarget,
+} from "@/components/SourceViewer";
 import { SourceStatusBadge } from "@/components/SourceStatusBadge";
 import { getNotebook, updateNotebook } from "@/lib/notebooks";
 import { getLatestConversation, queryNotebook } from "@/lib/query";
@@ -78,8 +82,30 @@ export default function NotebookWorkspacePage() {
   const [urlType, setUrlType] = useState<"auto" | "WEBSITE" | "YOUTUBE">("auto");
   const [addingUrl, setAddingUrl] = useState(false);
   const [busySourceId, setBusySourceId] = useState<string | null>(null);
+  const [viewer, setViewer] = useState<{
+    token: string;
+    target: SourceViewerTarget;
+  } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
+
+  const openSourceViewer = useCallback(
+    async (target: SourceViewerTarget) => {
+      try {
+        const token = await getToken();
+        if (!token) {
+          setError("Not authenticated");
+          return;
+        }
+        setViewer({ token, target });
+      } catch (err) {
+        setError(
+          err instanceof Error ? err.message : "Failed to open source viewer",
+        );
+      }
+    },
+    [getToken],
+  );
 
   const load = useCallback(
     async (opts?: { quiet?: boolean }) => {
@@ -568,6 +594,22 @@ export default function NotebookWorkspacePage() {
                           </p>
                         ) : null}
                         <div className="mt-2 flex flex-wrap gap-2">
+                          {source.status === "READY" ? (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                void openSourceViewer({
+                                  sourceId: source.id,
+                                  sourceType: source.type,
+                                  sourceTitle: source.title,
+                                  url: source.url,
+                                })
+                              }
+                              className="text-xs font-medium text-[#2f4f3a] hover:underline"
+                            >
+                              View
+                            </button>
+                          ) : null}
                           {canRetry ? (
                             <button
                               type="button"
@@ -623,7 +665,7 @@ export default function NotebookWorkspacePage() {
                   <p className="max-w-sm text-sm text-[#78716c]">
                     {readyCount === 0
                       ? "Index at least one source, then ask a question grounded in your materials."
-                      : "Ask anything about your sources. Answers always include citation chips."}
+                      : "Ask anything about your sources. Click a citation chip to open the source at that locus."}
                   </p>
                 </div>
               ) : (
@@ -649,17 +691,27 @@ export default function NotebookWorkspacePage() {
                         {!isUser && citations.length > 0 ? (
                           <div className="mt-2 flex max-w-[92%] flex-wrap gap-1.5">
                             {citations.map((citation) => (
-                              <span
+                              <button
                                 key={`${message.id}-${citation.citationId}-${citation.chunkId}`}
+                                type="button"
                                 title={citation.snippet}
-                                className="rounded border border-[#d6d3d1] bg-[#fafaf9] px-2 py-0.5 text-[11px] text-[#44403c]"
+                                onClick={() =>
+                                  void openSourceViewer({
+                                    sourceId: citation.sourceId,
+                                    sourceType: citation.sourceType,
+                                    sourceTitle: citation.sourceTitle,
+                                    citation,
+                                    url: citation.locator.url,
+                                  })
+                                }
+                                className="rounded border border-[#d6d3d1] bg-[#fafaf9] px-2 py-0.5 text-left text-[11px] text-[#44403c] transition hover:border-[#2f4f3a] hover:bg-[#eef3ef]"
                               >
                                 [{citation.citationId}] {citation.sourceTitle}
                                 <span className="text-[#a8a29e]">
                                   {" "}
                                   · {formatLocatorHint(citation)}
                                 </span>
-                              </span>
+                              </button>
                             ))}
                           </div>
                         ) : null}
@@ -712,6 +764,14 @@ export default function NotebookWorkspacePage() {
             </form>
           </section>
         </div>
+      ) : null}
+
+      {viewer ? (
+        <SourceViewer
+          token={viewer.token}
+          target={viewer.target}
+          onClose={() => setViewer(null)}
+        />
       ) : null}
     </main>
   );

@@ -1,5 +1,5 @@
-import { apiFetch } from "./api";
-import type { SourceSummary, SourceType } from "./types";
+import { ApiError, apiFetch, getApiUrl } from "./api";
+import type { SourceContentResponse, SourceSummary, SourceType } from "./types";
 
 export async function uploadSourceFile(
   token: string,
@@ -73,4 +73,36 @@ export async function deleteSource(token: string, sourceId: string) {
     token,
     method: "DELETE",
   });
+}
+
+export async function getSourceContent(token: string, sourceId: string) {
+  return apiFetch<SourceContentResponse>(`/api/sources/${sourceId}/content`, {
+    token,
+  });
+}
+
+/** Fetch stored binary (PDF etc.) as a Blob for in-browser viewers. */
+export async function getSourceFileBlob(
+  token: string,
+  sourceId: string,
+): Promise<Blob> {
+  const res = await fetch(getApiUrl(`/api/sources/${sourceId}/file`), {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    let message = body || `Request failed: ${res.status}`;
+    try {
+      const parsed = JSON.parse(body) as { error?: string };
+      if (parsed?.error) message = parsed.error;
+    } catch {
+      // keep raw body
+    }
+    throw new ApiError(res.status, message);
+  }
+
+  return res.blob();
 }

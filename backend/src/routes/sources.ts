@@ -10,6 +10,10 @@ import { requireAuth } from "../middleware/auth.js";
 import { prisma } from "../lib/prisma.js";
 import { deletePointsBySourceId } from "../lib/qdrant.js";
 import { enqueueSourceIndex } from "../queues/sourceIndex.js";
+import {
+  buildSegmentRanges,
+  extractSource,
+} from "../services/extractors/index.js";
 import { extractYoutubeVideoId } from "../services/extractors/youtube.js";
 
 export const sourcesRouter = Router();
@@ -332,6 +336,149 @@ sourcesRouter.get(
     }
 
     res.json({ source });
+  },
+);
+
+function contentKindForType(
+  type: SourceType,
+): "text" | "transcript" | "website" | "pdf" {
+  switch (type) {
+    case "YOUTUBE":
+    case "VTT":
+      return "transcript";
+    case "WEBSITE":
+      return "website";
+    case "PDF":
+      return "pdf";
+    default:
+      return "text";
+  }
+}
+
+async function loadSourceContentText(source: {
+  id: string;
+  type: SourceType;
+  storagePath: string | null;
+  url: string | null;
+}): Promise<{ content: string; fromExtract: boolean }> {
+  try {
+    const extracted = await extractSource(source);
+    const content = extracted.segments?.length
+      ? buildSegmentRanges(extracted.segments).fullText
+      : extracted.text;
+    if (content.trim()) {
+      return { content, fromExtract: true };
+    }
+  } catch (error) {
+    console.warn(
+      `[sources] Re-extract failed for ${source.id}, falling back to chunks:`,
+      error instanceof Error ? error.message : error,
+    );
+  }
+
+  const chunks = await prisma.chunk.findMany({
+    where: { sourceId: source.id },
+    orderBy: { index: "asc" },
+    select: { content: true },
+  });
+
+  if (chunks.length === 0) {
+    throw new Error("No content available for this source");
+  }
+
+  // Overlapping chunks — approximate body for display when re-extract fails.
+  return {
+    content: chunks.map((c) => c.content).join("\n\n"),
+    fromExtract: false,
+  };
+}
+
+/**
+ * GET /api/sources/:id/content — text / transcript / extracted body for viewers.
+ */
+sourcesRouter.get(
+  "/sources/:id/content",
+  requireAuth,
+  async (req: AuthenticatedRequest, res) => {
+    const id = paramId(req.params.id);
+    const source = await findOwnedSource(id, req.userId!);
+    if (!source) {
+      res.status(404).json({ error: "Source not found" });
+      return;
+    }
+
+    try {
+      const { content, fromExtract } = await loadSourceContentText(source);
+      res.json({
+        source: {
+          id: source.id,
+          type: source.type,
+          title: source.title,
+          url: source.url,
+          mimeType: source.mimeType,
+          metadata: source.metadata,
+          status: source.status,
+        },
+        content,
+        contentKind: contentKindForType(source.type),
+        offsetsReliable: fromExtract,
+      });
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Failed to load source content";
+      res.status(500).json({ error: message });
+    }
+  },
+);
+
+/**
+ * GET /api/sources/:id/file — stream stored binary (PDF / TEXT / VTT uploads).
+ */
+sourcesRouter.get(
+  "/sources/:id/file",
+  requireAuth,
+  async (req: AuthenticatedRequest, res) => {
+    const id = paramId(req.params.id);
+    const source = await findOwnedSource(id, req.userId!);
+    if (!source) {
+      res.status(404).json({ error: "Source not found" });
+      return;
+    }
+
+    if (!source.storagePath) {
+      res.status(404).json({
+        error: "This source has no stored file (URL-only sources)",
+      });
+      return;
+    }
+
+    const absolute = path.resolve(process.cwd(), source.storagePath);
+    if (!fs.existsSync(absolute)) {
+      res.status(404).json({ error: "Stored file is missing on disk" });
+      return;
+    }
+
+    const mime = source.mimeType || defaultMimeForType(source.type);
+    const downloadName =
+      source.originalName ||
+      `${source.title}${source.type === "PDF" ? ".pdf" : ""}`;
+
+    res.setHeader("Content-Type", mime);
+    res.setHeader(
+      "Content-Disposition",
+      `inline; filename="${downloadName.replace(/"/g, "")}"`,
+    );
+
+    const stream = fs.createReadStream(absolute);
+    stream.on("error", (error) => {
+      console.error(`[sources] File stream failed for ${id}:`, error);
+      if (!res.headersSent) {
+        res.status(500).json({ error: "Failed to stream file" });
+      } else {
+        res.destroy(error);
+      }
+    });
+    stream.pipe(res);
   },
 );
 

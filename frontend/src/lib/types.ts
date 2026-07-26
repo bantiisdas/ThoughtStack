@@ -46,6 +46,23 @@ export type Citation = {
   locator: CitationLocator;
 };
 
+export type SourceContentKind = "text" | "transcript" | "website" | "pdf";
+
+export type SourceContentResponse = {
+  source: {
+    id: string;
+    type: SourceType;
+    title: string;
+    url: string | null;
+    mimeType: string | null;
+    metadata: unknown;
+    status: SourceStatus;
+  };
+  content: string;
+  contentKind: SourceContentKind;
+  offsetsReliable: boolean;
+};
+
 export type QueryMeta = {
   attempts: number;
   grade: number;

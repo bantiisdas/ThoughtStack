@@ -5,8 +5,14 @@ import multer from "multer";
 import { z } from "zod";
 import type { SourceType } from "@prisma/client";
 import { env } from "../config/env.js";
+import {
+  MAX_FILE_BYTES,
+  MAX_FILE_MB,
+  MAX_SOURCES_PER_NOTEBOOK,
+} from "../config/limits.js";
 import type { AuthenticatedRequest } from "../middleware/auth.js";
 import { requireAuth } from "../middleware/auth.js";
+import { sourceWriteLimiter } from "../middleware/rateLimit.js";
 import { prisma } from "../lib/prisma.js";
 import { deletePointsBySourceId } from "../lib/qdrant.js";
 import { enqueueSourceIndex } from "../queues/sourceIndex.js";
@@ -32,8 +38,6 @@ const sourceSelect = {
   updatedAt: true,
   notebookId: true,
 } as const;
-
-const MAX_FILE_BYTES = 20 * 1024 * 1024;
 
 const urlBodySchema = z.object({
   type: z.enum(["WEBSITE", "YOUTUBE"]).optional(),
@@ -139,6 +143,14 @@ async function findOwnedSource(id: string, userId: string) {
   });
 }
 
+async function assertUnderSourceCap(notebookId: string): Promise<string | null> {
+  const count = await prisma.source.count({ where: { notebookId } });
+  if (count >= MAX_SOURCES_PER_NOTEBOOK) {
+    return `This notebook already has ${MAX_SOURCES_PER_NOTEBOOK} sources (maximum). Delete one to add another.`;
+  }
+  return null;
+}
+
 /**
  * POST /api/notebooks/:id/sources/upload
  * Multipart field `file` — TEXT (.txt/.md), PDF, or VTT.
@@ -146,6 +158,7 @@ async function findOwnedSource(id: string, userId: string) {
 sourcesRouter.post(
   "/notebooks/:id/sources/upload",
   requireAuth,
+  sourceWriteLimiter,
   upload.single("file"),
   async (req: AuthenticatedRequest, res) => {
     const notebookId = paramId(req.params.id);
@@ -155,9 +168,22 @@ sourcesRouter.post(
       return;
     }
 
+    const capError = await assertUnderSourceCap(notebookId);
+    if (capError) {
+      res.status(400).json({ error: capError });
+      return;
+    }
+
     const file = req.file;
     if (!file) {
       res.status(400).json({ error: "Missing file field (multipart name: file)" });
+      return;
+    }
+
+    if (file.size > MAX_FILE_BYTES) {
+      res.status(413).json({
+        error: `File too large. Maximum upload size is ${MAX_FILE_MB} MB.`,
+      });
       return;
     }
 
@@ -238,11 +264,18 @@ sourcesRouter.post(
 sourcesRouter.post(
   "/notebooks/:id/sources/url",
   requireAuth,
+  sourceWriteLimiter,
   async (req: AuthenticatedRequest, res) => {
     const notebookId = paramId(req.params.id);
     const notebook = await findOwnedNotebook(notebookId, req.userId!);
     if (!notebook) {
       res.status(404).json({ error: "Notebook not found" });
+      return;
+    }
+
+    const capError = await assertUnderSourceCap(notebookId);
+    if (capError) {
+      res.status(400).json({ error: capError });
       return;
     }
 

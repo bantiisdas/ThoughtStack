@@ -5,11 +5,19 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { AppHeader } from "@/components/AppHeader";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { ErrorBanner } from "@/components/ErrorBanner";
 import {
   SourceViewer,
   type SourceViewerTarget,
 } from "@/components/SourceViewer";
 import { SourceStatusBadge } from "@/components/SourceStatusBadge";
+import {
+  formatFileSize,
+  MAX_FILE_BYTES,
+  MAX_FILE_MB,
+  MAX_SOURCES_PER_NOTEBOOK,
+} from "@/lib/limits";
 import { getNotebook, updateNotebook } from "@/lib/notebooks";
 import { getLatestConversation, queryNotebook } from "@/lib/query";
 import {
@@ -82,6 +90,10 @@ export default function NotebookWorkspacePage() {
   const [urlType, setUrlType] = useState<"auto" | "WEBSITE" | "YOUTUBE">("auto");
   const [addingUrl, setAddingUrl] = useState(false);
   const [busySourceId, setBusySourceId] = useState<string | null>(null);
+  const [pendingDeleteSource, setPendingDeleteSource] = useState<{
+    id: string;
+    title: string;
+  } | null>(null);
   const [viewer, setViewer] = useState<{
     token: string;
     target: SourceViewerTarget;
@@ -242,6 +254,22 @@ export default function NotebookWorkspacePage() {
   async function handleFileUpload(file: File | null) {
     if (!file || !notebook || uploading) return;
 
+    if (sources.length >= MAX_SOURCES_PER_NOTEBOOK) {
+      setError(
+        `This notebook already has ${MAX_SOURCES_PER_NOTEBOOK} sources (maximum). Delete one to add another.`,
+      );
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      return;
+    }
+
+    if (file.size > MAX_FILE_BYTES) {
+      setError(
+        `“${file.name}” is ${formatFileSize(file.size)}. Maximum upload size is ${MAX_FILE_MB} MB.`,
+      );
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      return;
+    }
+
     setUploading(true);
     setError(null);
     try {
@@ -264,6 +292,13 @@ export default function NotebookWorkspacePage() {
     if (!notebook || addingUrl) return;
     const url = urlValue.trim();
     if (!url) return;
+
+    if (sources.length >= MAX_SOURCES_PER_NOTEBOOK) {
+      setError(
+        `This notebook already has ${MAX_SOURCES_PER_NOTEBOOK} sources (maximum). Delete one to add another.`,
+      );
+      return;
+    }
 
     setAddingUrl(true);
     setError(null);
@@ -311,10 +346,9 @@ export default function NotebookWorkspacePage() {
     }
   }
 
-  async function handleDelete(sourceId: string, title: string) {
-    if (busySourceId) return;
-    const ok = window.confirm(`Delete source “${title}”? This cannot be undone.`);
-    if (!ok) return;
+  async function confirmDeleteSource() {
+    if (!pendingDeleteSource || busySourceId) return;
+    const { id: sourceId } = pendingDeleteSource;
 
     setBusySourceId(sourceId);
     setError(null);
@@ -323,6 +357,7 @@ export default function NotebookWorkspacePage() {
       if (!token) throw new Error("Not authenticated");
       await deleteSource(token, sourceId);
       removeSourceLocal(sourceId);
+      setPendingDeleteSource(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to delete source");
     } finally {
@@ -397,10 +432,10 @@ export default function NotebookWorkspacePage() {
   }
 
   return (
-    <main className="flex min-h-screen flex-col bg-background text-foreground">
+    <main className="flex h-dvh flex-col overflow-hidden bg-background text-foreground">
       <AppHeader subtitle="Workspace" />
 
-      <div className="flex items-center gap-3 border-b border-[#e7e5e4] px-4 py-3 sm:px-6">
+      <div className="flex shrink-0 items-center gap-3 border-b border-[#e7e5e4] px-4 py-3 sm:px-6">
         <Link
           href="/notebooks"
           className="text-sm text-[#78716c] transition hover:text-[#1c1917]"
@@ -409,7 +444,10 @@ export default function NotebookWorkspacePage() {
         </Link>
         <span className="text-[#d6d3d1]">/</span>
         {loading ? (
-          <span className="text-sm text-[#a8a29e]">Loading…</span>
+          <span
+            className="inline-block h-4 w-40 animate-pulse rounded bg-[#e7e5e4]"
+            aria-label="Loading notebook"
+          />
         ) : notebook ? (
           editingTitle ? (
             <form onSubmit={handleRename} className="flex min-w-0 flex-1 items-center gap-2">
@@ -454,9 +492,11 @@ export default function NotebookWorkspacePage() {
       </div>
 
       {error ? (
-        <p className="mx-4 mt-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800 sm:mx-6">
-          {error}
-        </p>
+        <ErrorBanner
+          className="mx-4 mt-4 shrink-0 sm:mx-6"
+          message={error}
+          onDismiss={() => setError(null)}
+        />
       ) : null}
 
       {!loading && !notebook && !error ? (
@@ -464,15 +504,15 @@ export default function NotebookWorkspacePage() {
       ) : null}
 
       {notebook ? (
-        <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden lg:flex-row">
           {/* Sources panel */}
-          <aside className="flex w-full flex-col border-b border-[#e7e5e4] lg:w-80 lg:border-b-0 lg:border-r">
+          <aside className="flex max-h-[40vh] min-h-0 w-full shrink-0 flex-col overflow-hidden border-b border-[#e7e5e4] lg:max-h-none lg:w-80 lg:border-b-0 lg:border-r">
             <div className="flex items-center justify-between px-4 py-3">
               <h2 className="text-sm font-semibold tracking-wide text-[#44403c] uppercase">
                 Sources
               </h2>
               <span className="text-xs text-[#a8a29e]">
-                {sources.length} total
+                {sources.length}/{MAX_SOURCES_PER_NOTEBOOK}
               </span>
             </div>
 
@@ -488,21 +528,29 @@ export default function NotebookWorkspacePage() {
               />
               <button
                 type="button"
-                disabled={uploading}
+                disabled={
+                  uploading || sources.length >= MAX_SOURCES_PER_NOTEBOOK
+                }
                 onClick={() => fileInputRef.current?.click()}
+                title={`PDF, text, or VTT · max ${MAX_FILE_MB} MB`}
                 className="rounded-md border border-[#d6d3d1] bg-white px-2.5 py-1.5 text-xs text-[#1c1917] transition hover:border-[#a8a29e] hover:bg-[#fafaf9] disabled:cursor-not-allowed disabled:text-[#a8a29e]"
               >
                 {uploading ? "Uploading…" : "Upload file"}
               </button>
               <button
                 type="button"
-                disabled={addingUrl}
+                disabled={
+                  addingUrl || sources.length >= MAX_SOURCES_PER_NOTEBOOK
+                }
                 onClick={() => setUrlOpen((v) => !v)}
                 className="rounded-md border border-[#d6d3d1] bg-white px-2.5 py-1.5 text-xs text-[#1c1917] transition hover:border-[#a8a29e] hover:bg-[#fafaf9] disabled:cursor-not-allowed disabled:text-[#a8a29e]"
               >
                 {urlOpen ? "Cancel URL" : "Add URL"}
               </button>
             </div>
+            <p className="px-4 pb-2 text-[11px] text-[#a8a29e]">
+              Files up to {MAX_FILE_MB} MB · PDF, .txt/.md, .vtt
+            </p>
 
             {urlOpen ? (
               <form
@@ -554,7 +602,7 @@ export default function NotebookWorkspacePage() {
               </form>
             ) : null}
 
-            <div className="flex-1 overflow-y-auto px-4 pb-6">
+            <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-6">
               {sources.length === 0 ? (
                 <div className="rounded-md border border-dashed border-[#d6d3d1] px-3 py-8 text-center text-xs leading-relaxed text-[#78716c]">
                   No sources yet.
@@ -629,7 +677,10 @@ export default function NotebookWorkspacePage() {
                               type="button"
                               disabled={busy}
                               onClick={() =>
-                                void handleDelete(source.id, source.title)
+                                setPendingDeleteSource({
+                                  id: source.id,
+                                  title: source.title,
+                                })
                               }
                               className="text-xs font-medium text-red-700 hover:underline disabled:text-[#a8a29e]"
                             >
@@ -646,8 +697,8 @@ export default function NotebookWorkspacePage() {
           </aside>
 
           {/* Chat panel */}
-          <section className="flex min-h-[50vh] flex-1 flex-col">
-            <div className="border-b border-[#e7e5e4] px-4 py-3 sm:px-6">
+          <section className="flex min-h-0 flex-1 flex-col overflow-hidden">
+            <div className="shrink-0 border-b border-[#e7e5e4] px-4 py-3 sm:px-6">
               <h2 className="text-sm font-semibold tracking-wide text-[#44403c] uppercase">
                 Chat
               </h2>
@@ -659,7 +710,7 @@ export default function NotebookWorkspacePage() {
               </p>
             </div>
 
-            <div className="flex flex-1 flex-col overflow-y-auto px-4 py-4 sm:px-6">
+            <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-4 py-4 sm:px-6">
               {messages.length === 0 && !asking ? (
                 <div className="flex flex-1 flex-col items-center justify-center py-12 text-center">
                   <p className="max-w-sm text-sm text-[#78716c]">
@@ -669,7 +720,7 @@ export default function NotebookWorkspacePage() {
                   </p>
                 </div>
               ) : (
-                <ul className="mx-auto flex w-full max-w-2xl flex-col gap-4">
+                <ul className="flex w-full flex-col gap-4">
                   {messages.map((message) => {
                     const isUser = message.role === "user";
                     const citations = message.citations ?? [];
@@ -680,16 +731,16 @@ export default function NotebookWorkspacePage() {
                         className={`flex flex-col ${isUser ? "items-end" : "items-start"}`}
                       >
                         <div
-                          className={`max-w-[92%] rounded-md px-3 py-2 text-sm leading-relaxed whitespace-pre-wrap ${
+                          className={`max-w-[85%] rounded-md px-3 py-2 text-sm leading-relaxed whitespace-pre-wrap sm:max-w-[75%] ${
                             isUser
                               ? "bg-[#2f4f3a] text-[#f4f7f4]"
-                              : "border border-[#e7e5e4] bg-white text-[#1c1917]"
+                              : "w-full max-w-none border border-[#e7e5e4] bg-white text-[#1c1917]"
                           }`}
                         >
                           {message.content}
                         </div>
                         {!isUser && citations.length > 0 ? (
-                          <div className="mt-2 flex max-w-[92%] flex-wrap gap-1.5">
+                          <div className="mt-2 flex w-full flex-wrap gap-1.5">
                             {citations.map((citation) => (
                               <button
                                 key={`${message.id}-${citation.citationId}-${citation.chunkId}`}
@@ -725,7 +776,13 @@ export default function NotebookWorkspacePage() {
                     );
                   })}
                   {asking ? (
-                    <li className="text-sm text-[#78716c]">Thinking…</li>
+                    <li
+                      className="flex items-center gap-2 text-sm text-[#78716c]"
+                      aria-live="polite"
+                    >
+                      <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-[#2f4f3a]" />
+                      Thinking… retrieving and grading answer
+                    </li>
                   ) : null}
                   <div ref={chatEndRef} />
                 </ul>
@@ -733,7 +790,7 @@ export default function NotebookWorkspacePage() {
             </div>
 
             <form
-              className="border-t border-[#e7e5e4] px-4 py-4 sm:px-6"
+              className="shrink-0 border-t border-[#e7e5e4] px-4 py-4 sm:px-6"
               onSubmit={(e) => {
                 void handleAsk(e);
               }}
@@ -773,6 +830,26 @@ export default function NotebookWorkspacePage() {
           onClose={() => setViewer(null)}
         />
       ) : null}
+
+      <ConfirmDialog
+        open={pendingDeleteSource !== null}
+        title="Delete source?"
+        description={
+          pendingDeleteSource
+            ? `Delete “${pendingDeleteSource.title}”? Chunks and embeddings for this source will be removed. This cannot be undone.`
+            : ""
+        }
+        confirmLabel="Delete"
+        danger
+        busy={busySourceId === pendingDeleteSource?.id}
+        onCancel={() => {
+          if (busySourceId) return;
+          setPendingDeleteSource(null);
+        }}
+        onConfirm={() => {
+          void confirmDeleteSource();
+        }}
+      />
     </main>
   );
 }

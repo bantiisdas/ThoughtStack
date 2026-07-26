@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import type { AuthenticatedRequest } from "../middleware/auth.js";
 import { requireAuth } from "../middleware/auth.js";
+import { queryLimiter } from "../middleware/rateLimit.js";
 import { prisma } from "../lib/prisma.js";
 import {
   runQueryPipeline,
@@ -60,6 +61,7 @@ function serializeMessage(m: {
 queryRouter.post(
   "/notebooks/:id/query",
   requireAuth,
+  queryLimiter,
   async (req: AuthenticatedRequest, res) => {
     const parsed = queryBodySchema.safeParse(req.body);
     if (!parsed.success) {

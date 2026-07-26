@@ -4,6 +4,8 @@ import { useAuth } from "@clerk/nextjs";
 import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { AppHeader } from "@/components/AppHeader";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { ErrorBanner } from "@/components/ErrorBanner";
 import {
   createNotebook,
   deleteNotebook,
@@ -19,6 +21,10 @@ export default function NotebooksPage() {
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<{
+    id: string;
+    title: string;
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -67,14 +73,9 @@ export default function NotebooksPage() {
     }
   }
 
-  async function handleDelete(id: string, notebookTitle: string) {
-    if (
-      !window.confirm(
-        `Delete “${notebookTitle}”? Sources and chat history for this notebook will be removed.`,
-      )
-    ) {
-      return;
-    }
+  async function confirmDeleteNotebook() {
+    if (!pendingDelete) return;
+    const { id } = pendingDelete;
 
     setDeletingId(id);
     setError(null);
@@ -83,6 +84,7 @@ export default function NotebooksPage() {
       if (!token) throw new Error("Not authenticated");
       await deleteNotebook(token, id);
       setNotebooks((prev) => prev.filter((n) => n.id !== id));
+      setPendingDelete(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to delete notebook");
     } finally {
@@ -144,14 +146,24 @@ export default function NotebooksPage() {
         </form>
 
         {error ? (
-          <p className="mt-6 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
-            {error}
-          </p>
+          <ErrorBanner
+            className="mt-6"
+            message={error}
+            onDismiss={() => setError(null)}
+          />
         ) : null}
 
         <div className="mt-10">
           {loading ? (
-            <p className="text-sm text-[#78716c]">Loading notebooks…</p>
+            <ul className="space-y-3 border-t border-[#e7e5e4] pt-4" aria-busy>
+              {[0, 1, 2].map((i) => (
+                <li
+                  key={i}
+                  className="h-14 animate-pulse rounded-md bg-[#e7e5e4]/70"
+                />
+              ))}
+              <li className="sr-only">Loading notebooks…</li>
+            </ul>
           ) : notebooks.length === 0 ? (
             <div className="rounded-lg border border-dashed border-[#d6d3d1] px-6 py-12 text-center text-sm text-[#78716c]">
               No notebooks yet — create one above to open a workspace.
@@ -192,7 +204,12 @@ export default function NotebooksPage() {
                     </Link>
                     <button
                       type="button"
-                      onClick={() => handleDelete(notebook.id, notebook.title)}
+                      onClick={() =>
+                        setPendingDelete({
+                          id: notebook.id,
+                          title: notebook.title,
+                        })
+                      }
                       disabled={deletingId === notebook.id}
                       className="rounded-md px-3 py-1.5 text-sm text-red-700 transition hover:bg-red-50 disabled:opacity-50"
                     >
@@ -205,6 +222,26 @@ export default function NotebooksPage() {
           )}
         </div>
       </section>
+
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        title="Delete notebook?"
+        description={
+          pendingDelete
+            ? `Delete “${pendingDelete.title}”? Sources, vectors, and chat history for this notebook will be removed. This cannot be undone.`
+            : ""
+        }
+        confirmLabel="Delete"
+        danger
+        busy={deletingId !== null}
+        onCancel={() => {
+          if (deletingId) return;
+          setPendingDelete(null);
+        }}
+        onConfirm={() => {
+          void confirmDeleteNotebook();
+        }}
+      />
     </main>
   );
 }

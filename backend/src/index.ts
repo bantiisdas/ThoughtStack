@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { env } from "./config/env.js";
 import { ensureQdrantCollection } from "./lib/qdrant.js";
+import { errorHandler } from "./middleware/errorHandler.js";
 import { healthRouter } from "./routes/health.js";
 import { meRouter } from "./routes/me.js";
 import { notebooksRouter } from "./routes/notebooks.js";
@@ -40,6 +41,8 @@ app.get("/", (_req, res) => {
     docs: "See README.md",
   });
 });
+
+app.use(errorHandler);
 
 async function bootstrap() {
   try {

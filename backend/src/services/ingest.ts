@@ -1,6 +1,4 @@
 import { randomUUID } from "node:crypto";
-import fs from "node:fs/promises";
-import path from "node:path";
 import { OpenAIEmbeddings } from "@langchain/openai";
 import { RecursiveCharacterTextSplitter } from "@langchain/textsplitters";
 import type { Prisma } from "@prisma/client";
@@ -12,39 +10,16 @@ import {
   upsertChunkPoints,
   type ChunkPointPayload,
 } from "../lib/qdrant.js";
+import {
+  buildChunkLocators,
+  buildSegmentRanges,
+  extractSource,
+  type ChunkLocator,
+} from "./extractors/index.js";
 
 /** ~800–1000 tokens ≈ 3200–4000 chars; overlap ~150 tokens ≈ 600 chars. */
 const CHUNK_SIZE = 3500;
 const CHUNK_OVERLAP = 600;
-
-export type TextLocator = {
-  startChar: number;
-  endChar: number;
-};
-
-async function extractTextSource(storagePath: string): Promise<string> {
-  const absolute = path.resolve(process.cwd(), storagePath);
-  const text = await fs.readFile(absolute, "utf8");
-  if (!text.trim()) {
-    throw new Error("Text file is empty");
-  }
-  return text;
-}
-
-function buildLocators(fullText: string, chunks: string[]): TextLocator[] {
-  const locators: TextLocator[] = [];
-  let cursor = 0;
-
-  for (const chunk of chunks) {
-    const idx = fullText.indexOf(chunk, cursor);
-    const startChar = idx >= 0 ? idx : cursor;
-    const endChar = startChar + chunk.length;
-    locators.push({ startChar, endChar });
-    cursor = endChar;
-  }
-
-  return locators;
-}
 
 function getEmbeddings(): OpenAIEmbeddings {
   if (!env.OPENAI_API_KEY) {
@@ -58,7 +33,7 @@ function getEmbeddings(): OpenAIEmbeddings {
 
 /**
  * Full ingest for a single source: extract → chunk → embed → Qdrant + Prisma.
- * Currently implements TEXT; other types throw until later phases.
+ * Supports TEXT, PDF, WEBSITE, YOUTUBE, VTT. Reindex-safe (clears old vectors/chunks).
  */
 export async function indexSource(sourceId: string): Promise<void> {
   const source = await prisma.source.findUnique({ where: { id: sourceId } });
@@ -72,22 +47,20 @@ export async function indexSource(sourceId: string): Promise<void> {
   });
 
   try {
-    if (source.type !== "TEXT") {
-      throw new Error(
-        `Indexing for source type ${source.type} is not implemented yet`,
-      );
-    }
-    if (!source.storagePath) {
-      throw new Error("Source has no storagePath");
-    }
-
     await ensureQdrantCollection();
 
     // Clear any previous vectors/chunks (reindex-safe).
     await deletePointsBySourceId(sourceId);
     await prisma.chunk.deleteMany({ where: { sourceId } });
 
-    const fullText = await extractTextSource(source.storagePath);
+    const extracted = await extractSource(source);
+    const fullText = extracted.segments?.length
+      ? buildSegmentRanges(extracted.segments).fullText
+      : extracted.text;
+
+    if (!fullText.trim()) {
+      throw new Error("Extractor produced empty text");
+    }
 
     const splitter = new RecursiveCharacterTextSplitter({
       chunkSize: CHUNK_SIZE,
@@ -104,7 +77,11 @@ export async function indexSource(sourceId: string): Promise<void> {
     }
 
     const chunkTexts = docs.map((d) => d.pageContent);
-    const locators = buildLocators(fullText, chunkTexts);
+    const locators = buildChunkLocators(
+      fullText,
+      chunkTexts,
+      extracted.segments,
+    );
 
     const createdChunks = await prisma.$transaction(
       docs.map((doc, index) =>
@@ -127,7 +104,7 @@ export async function indexSource(sourceId: string): Promise<void> {
     );
 
     const points = createdChunks.map((chunk, i) => {
-      const locator = chunk.locator as TextLocator | null;
+      const locator = chunk.locator as ChunkLocator | null;
       const payload: ChunkPointPayload = {
         notebookId: chunk.notebookId,
         sourceId: chunk.sourceId,
@@ -145,6 +122,7 @@ export async function indexSource(sourceId: string): Promise<void> {
     await upsertChunkPoints(points);
 
     const metadata: Prisma.InputJsonValue = {
+      ...extracted.metadata,
       charCount: fullText.length,
       chunkCount: createdChunks.length,
     };
@@ -159,7 +137,7 @@ export async function indexSource(sourceId: string): Promise<void> {
     });
 
     console.log(
-      `[ingest] Source ${sourceId} READY (${createdChunks.length} chunks)`,
+      `[ingest] Source ${sourceId} (${source.type}) READY (${createdChunks.length} chunks)`,
     );
   } catch (error) {
     const message =

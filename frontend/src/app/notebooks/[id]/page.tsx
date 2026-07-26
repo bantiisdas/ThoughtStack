@@ -7,11 +7,34 @@ import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { AppHeader } from "@/components/AppHeader";
 import { SourceStatusBadge } from "@/components/SourceStatusBadge";
 import { getNotebook, updateNotebook } from "@/lib/notebooks";
-import { uploadTextSource } from "@/lib/sources";
-import type { Notebook, SourceStatus } from "@/lib/types";
+import {
+  addUrlSource,
+  deleteSource,
+  reindexSource,
+  uploadSourceFile,
+} from "@/lib/sources";
+import type { Notebook, SourceStatus, SourceType } from "@/lib/types";
 
 const IN_FLIGHT: SourceStatus[] = ["UPLOADING", "INDEXING"];
 const POLL_MS = 2500;
+
+const FILE_ACCEPT =
+  ".txt,.text,.md,.pdf,.vtt,text/plain,text/markdown,text/vtt,application/pdf,text/*";
+
+function looksLikeYoutube(url: string): boolean {
+  try {
+    const parsed = new URL(url.trim());
+    const host = parsed.hostname.replace(/^www\./, "");
+    return (
+      host === "youtu.be" ||
+      host === "youtube.com" ||
+      host === "m.youtube.com" ||
+      host === "music.youtube.com"
+    );
+  } catch {
+    return /youtu\.be\/|youtube\.com\//i.test(url);
+  }
+}
 
 export default function NotebookWorkspacePage() {
   const params = useParams<{ id: string }>();
@@ -26,6 +49,12 @@ export default function NotebookWorkspacePage() {
   const [savingTitle, setSavingTitle] = useState(false);
   const [question, setQuestion] = useState("");
   const [uploading, setUploading] = useState(false);
+  const [urlOpen, setUrlOpen] = useState(false);
+  const [urlValue, setUrlValue] = useState("");
+  const [urlTitle, setUrlTitle] = useState("");
+  const [urlType, setUrlType] = useState<"auto" | "WEBSITE" | "YOUTUBE">("auto");
+  const [addingUrl, setAddingUrl] = useState(false);
+  const [busySourceId, setBusySourceId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(
@@ -73,6 +102,27 @@ export default function NotebookWorkspacePage() {
     return () => window.clearInterval(id);
   }, [hasInFlight, isLoaded, load]);
 
+  function upsertSource(source: NonNullable<Notebook["sources"]>[number]) {
+    setNotebook((prev) => {
+      if (!prev) return prev;
+      const existing = prev.sources ?? [];
+      return {
+        ...prev,
+        sources: [source, ...existing.filter((s) => s.id !== source.id)],
+      };
+    });
+  }
+
+  function removeSourceLocal(sourceId: string) {
+    setNotebook((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        sources: (prev.sources ?? []).filter((s) => s.id !== sourceId),
+      };
+    });
+  }
+
   async function handleRename(e: FormEvent) {
     e.preventDefault();
     if (!notebook || savingTitle) return;
@@ -102,7 +152,7 @@ export default function NotebookWorkspacePage() {
     }
   }
 
-  async function handleTextUpload(file: File | null) {
+  async function handleFileUpload(file: File | null) {
     if (!file || !notebook || uploading) return;
 
     setUploading(true);
@@ -110,22 +160,86 @@ export default function NotebookWorkspacePage() {
     try {
       const token = await getToken();
       if (!token) throw new Error("Not authenticated");
-      const { source } = await uploadTextSource(token, notebook.id, file);
-      setNotebook((prev) => {
-        if (!prev) return prev;
-        const existing = prev.sources ?? [];
-        return {
-          ...prev,
-          sources: [source, ...existing.filter((s) => s.id !== source.id)],
-        };
-      });
+      const { source } = await uploadSourceFile(token, notebook.id, file);
+      upsertSource(source);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to upload text file");
+      setError(err instanceof Error ? err.message : "Failed to upload file");
     } finally {
       setUploading(false);
       if (fileInputRef.current) {
         fileInputRef.current.value = "";
       }
+    }
+  }
+
+  async function handleAddUrl(e: FormEvent) {
+    e.preventDefault();
+    if (!notebook || addingUrl) return;
+    const url = urlValue.trim();
+    if (!url) return;
+
+    setAddingUrl(true);
+    setError(null);
+    try {
+      const token = await getToken();
+      if (!token) throw new Error("Not authenticated");
+
+      let type: Extract<SourceType, "WEBSITE" | "YOUTUBE"> | undefined;
+      if (urlType === "auto") {
+        type = looksLikeYoutube(url) ? "YOUTUBE" : "WEBSITE";
+      } else {
+        type = urlType;
+      }
+
+      const { source } = await addUrlSource(token, notebook.id, {
+        url,
+        type,
+        title: urlTitle.trim() || undefined,
+      });
+      upsertSource(source);
+      setUrlOpen(false);
+      setUrlValue("");
+      setUrlTitle("");
+      setUrlType("auto");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to add URL source");
+    } finally {
+      setAddingUrl(false);
+    }
+  }
+
+  async function handleReindex(sourceId: string) {
+    if (busySourceId) return;
+    setBusySourceId(sourceId);
+    setError(null);
+    try {
+      const token = await getToken();
+      if (!token) throw new Error("Not authenticated");
+      const { source } = await reindexSource(token, sourceId);
+      upsertSource(source);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to reindex source");
+    } finally {
+      setBusySourceId(null);
+    }
+  }
+
+  async function handleDelete(sourceId: string, title: string) {
+    if (busySourceId) return;
+    const ok = window.confirm(`Delete source “${title}”? This cannot be undone.`);
+    if (!ok) return;
+
+    setBusySourceId(sourceId);
+    setError(null);
+    try {
+      const token = await getToken();
+      if (!token) throw new Error("Not authenticated");
+      await deleteSource(token, sourceId);
+      removeSourceLocal(sourceId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to delete source");
+    } finally {
+      setBusySourceId(null);
     }
   }
 
@@ -215,10 +329,10 @@ export default function NotebookWorkspacePage() {
               <input
                 ref={fileInputRef}
                 type="file"
-                accept=".txt,.text,.md,text/plain,text/markdown,text/*"
+                accept={FILE_ACCEPT}
                 className="hidden"
                 onChange={(e) => {
-                  void handleTextUpload(e.target.files?.[0] ?? null);
+                  void handleFileUpload(e.target.files?.[0] ?? null);
                 }}
               />
               <button
@@ -227,49 +341,138 @@ export default function NotebookWorkspacePage() {
                 onClick={() => fileInputRef.current?.click()}
                 className="rounded-md border border-[#d6d3d1] bg-white px-2.5 py-1.5 text-xs text-[#1c1917] transition hover:border-[#a8a29e] hover:bg-[#fafaf9] disabled:cursor-not-allowed disabled:text-[#a8a29e]"
               >
-                {uploading ? "Uploading…" : "Upload text"}
+                {uploading ? "Uploading…" : "Upload file"}
               </button>
               <button
                 type="button"
-                disabled
-                title="Coming in a later phase"
-                className="rounded-md border border-[#d6d3d1] bg-white px-2.5 py-1.5 text-xs text-[#a8a29e]"
+                disabled={addingUrl}
+                onClick={() => setUrlOpen((v) => !v)}
+                className="rounded-md border border-[#d6d3d1] bg-white px-2.5 py-1.5 text-xs text-[#1c1917] transition hover:border-[#a8a29e] hover:bg-[#fafaf9] disabled:cursor-not-allowed disabled:text-[#a8a29e]"
               >
-                Add URL
+                {urlOpen ? "Cancel URL" : "Add URL"}
               </button>
             </div>
+
+            {urlOpen ? (
+              <form
+                onSubmit={handleAddUrl}
+                className="mx-4 mb-3 space-y-2 rounded-md border border-[#e7e5e4] bg-[#fafaf9] p-3"
+              >
+                <label className="block text-xs text-[#57534e]">
+                  Website or YouTube URL
+                  <input
+                    type="url"
+                    required
+                    value={urlValue}
+                    onChange={(e) => setUrlValue(e.target.value)}
+                    placeholder="https://…"
+                    className="mt-1 w-full rounded-md border border-[#d6d3d1] bg-white px-2 py-1.5 text-sm outline-none ring-[#2f4f3a] focus:ring-2"
+                  />
+                </label>
+                <label className="block text-xs text-[#57534e]">
+                  Title (optional)
+                  <input
+                    type="text"
+                    value={urlTitle}
+                    onChange={(e) => setUrlTitle(e.target.value)}
+                    maxLength={200}
+                    className="mt-1 w-full rounded-md border border-[#d6d3d1] bg-white px-2 py-1.5 text-sm outline-none ring-[#2f4f3a] focus:ring-2"
+                  />
+                </label>
+                <label className="block text-xs text-[#57534e]">
+                  Type
+                  <select
+                    value={urlType}
+                    onChange={(e) =>
+                      setUrlType(e.target.value as "auto" | "WEBSITE" | "YOUTUBE")
+                    }
+                    className="mt-1 w-full rounded-md border border-[#d6d3d1] bg-white px-2 py-1.5 text-sm outline-none ring-[#2f4f3a] focus:ring-2"
+                  >
+                    <option value="auto">Auto-detect</option>
+                    <option value="WEBSITE">Website</option>
+                    <option value="YOUTUBE">YouTube</option>
+                  </select>
+                </label>
+                <button
+                  type="submit"
+                  disabled={addingUrl || !urlValue.trim()}
+                  className="w-full rounded-md bg-[#2f4f3a] px-2.5 py-1.5 text-xs font-medium text-[#f4f7f4] disabled:opacity-50"
+                >
+                  {addingUrl ? "Adding…" : "Add source"}
+                </button>
+              </form>
+            ) : null}
 
             <div className="flex-1 overflow-y-auto px-4 pb-6">
               {sources.length === 0 ? (
                 <div className="rounded-md border border-dashed border-[#d6d3d1] px-3 py-8 text-center text-xs leading-relaxed text-[#78716c]">
                   No sources yet.
                   <br />
-                  Upload a .txt file to start indexing.
+                  Upload a text, PDF, or VTT file — or add a website / YouTube URL.
                 </div>
               ) : (
                 <ul className="space-y-2">
-                  {sources.map((source) => (
-                    <li
-                      key={source.id}
-                      className="rounded-md border border-[#e7e5e4] bg-white/60 px-3 py-2"
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <p className="truncate text-sm font-medium text-[#1c1917]">
-                          {source.title}
+                  {sources.map((source) => {
+                    const busy = busySourceId === source.id;
+                    const canRetry =
+                      source.status === "FAILED" || source.status === "READY";
+                    const inFlight = IN_FLIGHT.includes(source.status);
+
+                    return (
+                      <li
+                        key={source.id}
+                        className="rounded-md border border-[#e7e5e4] bg-white/60 px-3 py-2"
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <p className="truncate text-sm font-medium text-[#1c1917]">
+                            {source.title}
+                          </p>
+                          <SourceStatusBadge status={source.status} />
+                        </div>
+                        <p className="mt-0.5 text-xs text-[#78716c]">
+                          {source.type}
+                          {source.originalName
+                            ? ` · ${source.originalName}`
+                            : source.url
+                              ? ` · ${source.url}`
+                              : ""}
                         </p>
-                        <SourceStatusBadge status={source.status} />
-                      </div>
-                      <p className="mt-0.5 text-xs text-[#78716c]">
-                        {source.type}
-                        {source.originalName ? ` · ${source.originalName}` : ""}
-                      </p>
-                      {source.status === "FAILED" && source.errorMessage ? (
-                        <p className="mt-1 text-xs leading-snug text-red-700">
-                          {source.errorMessage}
-                        </p>
-                      ) : null}
-                    </li>
-                  ))}
+                        {source.status === "FAILED" && source.errorMessage ? (
+                          <p className="mt-1 text-xs leading-snug text-red-700">
+                            {source.errorMessage}
+                          </p>
+                        ) : null}
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          {canRetry ? (
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() => void handleReindex(source.id)}
+                              className="text-xs font-medium text-[#2f4f3a] hover:underline disabled:text-[#a8a29e]"
+                            >
+                              {busy
+                                ? "Working…"
+                                : source.status === "FAILED"
+                                  ? "Retry"
+                                  : "Reindex"}
+                            </button>
+                          ) : null}
+                          {!inFlight ? (
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() =>
+                                void handleDelete(source.id, source.title)
+                              }
+                              className="text-xs font-medium text-red-700 hover:underline disabled:text-[#a8a29e]"
+                            >
+                              Delete
+                            </button>
+                          ) : null}
+                        </div>
+                      </li>
+                    );
+                  })}
                 </ul>
               )}
             </div>

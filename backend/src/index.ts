@@ -8,6 +8,7 @@ import { ensureQdrantCollection } from "./lib/qdrant.js";
 import { healthRouter } from "./routes/health.js";
 import { meRouter } from "./routes/me.js";
 import { notebooksRouter } from "./routes/notebooks.js";
+import { queryRouter } from "./routes/query.js";
 import { sourcesRouter } from "./routes/sources.js";
 
 const app = express();
@@ -30,6 +31,7 @@ app.use(healthRouter);
 app.use("/api", meRouter);
 app.use("/api", notebooksRouter);
 app.use("/api", sourcesRouter);
+app.use("/api", queryRouter);
 
 app.get("/", (_req, res) => {
   res.json({

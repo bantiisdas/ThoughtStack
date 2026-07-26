@@ -7,13 +7,20 @@ import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { AppHeader } from "@/components/AppHeader";
 import { SourceStatusBadge } from "@/components/SourceStatusBadge";
 import { getNotebook, updateNotebook } from "@/lib/notebooks";
+import { getLatestConversation, queryNotebook } from "@/lib/query";
 import {
   addUrlSource,
   deleteSource,
   reindexSource,
   uploadSourceFile,
 } from "@/lib/sources";
-import type { Notebook, SourceStatus, SourceType } from "@/lib/types";
+import type {
+  ChatMessage,
+  Citation,
+  Notebook,
+  SourceStatus,
+  SourceType,
+} from "@/lib/types";
 
 const IN_FLIGHT: SourceStatus[] = ["UPLOADING", "INDEXING"];
 const POLL_MS = 2500;
@@ -36,6 +43,19 @@ function looksLikeYoutube(url: string): boolean {
   }
 }
 
+function formatLocatorHint(citation: Citation): string {
+  const { locator, sourceType } = citation;
+  if (typeof locator.page === "number") return `p. ${locator.page}`;
+  if (typeof locator.startMs === "number") {
+    const sec = Math.floor(locator.startMs / 1000);
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return `${m}:${String(s).padStart(2, "0")}`;
+  }
+  if (locator.url) return sourceType === "WEBSITE" ? "web" : "link";
+  return sourceType.toLowerCase();
+}
+
 export default function NotebookWorkspacePage() {
   const params = useParams<{ id: string }>();
   const notebookId = params.id;
@@ -48,6 +68,9 @@ export default function NotebookWorkspacePage() {
   const [titleDraft, setTitleDraft] = useState("");
   const [savingTitle, setSavingTitle] = useState(false);
   const [question, setQuestion] = useState("");
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [conversationId, setConversationId] = useState<string | null>(null);
+  const [asking, setAsking] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [urlOpen, setUrlOpen] = useState(false);
   const [urlValue, setUrlValue] = useState("");
@@ -56,6 +79,7 @@ export default function NotebookWorkspacePage() {
   const [addingUrl, setAddingUrl] = useState(false);
   const [busySourceId, setBusySourceId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const chatEndRef = useRef<HTMLDivElement>(null);
 
   const load = useCallback(
     async (opts?: { quiet?: boolean }) => {
@@ -89,6 +113,43 @@ export default function NotebookWorkspacePage() {
     if (!isLoaded || !notebookId) return;
     void load();
   }, [isLoaded, notebookId, load]);
+
+  // Load latest conversation for chat replay.
+  useEffect(() => {
+    if (!isLoaded || !notebookId) return;
+    let cancelled = false;
+
+    async function loadConversation() {
+      try {
+        const token = await getToken();
+        if (!token || cancelled) return;
+        const { conversation } = await getLatestConversation(token, notebookId);
+        if (cancelled) return;
+        if (conversation) {
+          setConversationId(conversation.id);
+          setMessages(conversation.messages);
+        } else {
+          setConversationId(null);
+          setMessages([]);
+        }
+      } catch {
+        // Non-fatal — chat can start empty.
+        if (!cancelled) {
+          setConversationId(null);
+          setMessages([]);
+        }
+      }
+    }
+
+    void loadConversation();
+    return () => {
+      cancelled = true;
+    };
+  }, [isLoaded, notebookId, getToken]);
+
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, asking]);
 
   const sources = notebook?.sources ?? [];
   const hasInFlight = sources.some((s) => IN_FLIGHT.includes(s.status));
@@ -244,6 +305,70 @@ export default function NotebookWorkspacePage() {
   }
 
   const readyCount = sources.filter((s) => s.status === "READY").length;
+
+  async function handleAsk(e: FormEvent) {
+    e.preventDefault();
+    if (!notebook || asking || readyCount === 0) return;
+    const q = question.trim();
+    if (!q) return;
+
+    setAsking(true);
+    setError(null);
+    setQuestion("");
+
+    const tempUserId = `temp-user-${Date.now()}`;
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: tempUserId,
+        role: "user",
+        content: q,
+        citations: null,
+        meta: null,
+        createdAt: new Date().toISOString(),
+      },
+    ]);
+
+    try {
+      const token = await getToken();
+      if (!token) throw new Error("Not authenticated");
+
+      const result = await queryNotebook(token, notebook.id, {
+        question: q,
+        conversationId,
+      });
+
+      setConversationId(result.conversationId);
+      setMessages((prev) => {
+        const withoutTemp = prev.filter((m) => m.id !== tempUserId);
+        return [
+          ...withoutTemp,
+          {
+            id: result.userMessageId,
+            role: "user",
+            content: q,
+            citations: null,
+            meta: null,
+            createdAt: new Date().toISOString(),
+          },
+          {
+            id: result.assistantMessageId,
+            role: "assistant",
+            content: result.answer,
+            citations: result.citations,
+            meta: result.meta,
+            createdAt: new Date().toISOString(),
+          },
+        ];
+      });
+    } catch (err) {
+      setMessages((prev) => prev.filter((m) => m.id !== tempUserId));
+      setQuestion(q);
+      setError(err instanceof Error ? err.message : "Failed to get an answer");
+    } finally {
+      setAsking(false);
+    }
+  }
 
   return (
     <main className="flex min-h-screen flex-col bg-background text-foreground">
@@ -492,17 +617,73 @@ export default function NotebookWorkspacePage() {
               </p>
             </div>
 
-            <div className="flex flex-1 flex-col items-center justify-center px-6 py-12 text-center">
-              <p className="max-w-sm text-sm text-[#78716c]">
-                Answers with citations will appear here. Query pipeline arrives
-                in Phase 4.
-              </p>
+            <div className="flex flex-1 flex-col overflow-y-auto px-4 py-4 sm:px-6">
+              {messages.length === 0 && !asking ? (
+                <div className="flex flex-1 flex-col items-center justify-center py-12 text-center">
+                  <p className="max-w-sm text-sm text-[#78716c]">
+                    {readyCount === 0
+                      ? "Index at least one source, then ask a question grounded in your materials."
+                      : "Ask anything about your sources. Answers always include citation chips."}
+                  </p>
+                </div>
+              ) : (
+                <ul className="mx-auto flex w-full max-w-2xl flex-col gap-4">
+                  {messages.map((message) => {
+                    const isUser = message.role === "user";
+                    const citations = message.citations ?? [];
+
+                    return (
+                      <li
+                        key={message.id}
+                        className={`flex flex-col ${isUser ? "items-end" : "items-start"}`}
+                      >
+                        <div
+                          className={`max-w-[92%] rounded-md px-3 py-2 text-sm leading-relaxed whitespace-pre-wrap ${
+                            isUser
+                              ? "bg-[#2f4f3a] text-[#f4f7f4]"
+                              : "border border-[#e7e5e4] bg-white text-[#1c1917]"
+                          }`}
+                        >
+                          {message.content}
+                        </div>
+                        {!isUser && citations.length > 0 ? (
+                          <div className="mt-2 flex max-w-[92%] flex-wrap gap-1.5">
+                            {citations.map((citation) => (
+                              <span
+                                key={`${message.id}-${citation.citationId}-${citation.chunkId}`}
+                                title={citation.snippet}
+                                className="rounded border border-[#d6d3d1] bg-[#fafaf9] px-2 py-0.5 text-[11px] text-[#44403c]"
+                              >
+                                [{citation.citationId}] {citation.sourceTitle}
+                                <span className="text-[#a8a29e]">
+                                  {" "}
+                                  · {formatLocatorHint(citation)}
+                                </span>
+                              </span>
+                            ))}
+                          </div>
+                        ) : null}
+                        {!isUser && message.meta ? (
+                          <p className="mt-1 text-[10px] text-[#a8a29e]">
+                            Grade {message.meta.grade}/10 · attempt{" "}
+                            {message.meta.attempts}
+                          </p>
+                        ) : null}
+                      </li>
+                    );
+                  })}
+                  {asking ? (
+                    <li className="text-sm text-[#78716c]">Thinking…</li>
+                  ) : null}
+                  <div ref={chatEndRef} />
+                </ul>
+              )}
             </div>
 
             <form
               className="border-t border-[#e7e5e4] px-4 py-4 sm:px-6"
               onSubmit={(e) => {
-                e.preventDefault();
+                void handleAsk(e);
               }}
             >
               <div className="flex gap-2">
@@ -515,15 +696,17 @@ export default function NotebookWorkspacePage() {
                       ? "Add a ready source before asking…"
                       : "Ask a question about your sources…"
                   }
-                  disabled={readyCount === 0}
+                  disabled={readyCount === 0 || asking}
                   className="min-w-0 flex-1 rounded-md border border-[#d6d3d1] bg-white px-3 py-2.5 text-sm outline-none ring-[#2f4f3a] placeholder:text-[#a8a29e] focus:ring-2 disabled:bg-[#f5f5f4] disabled:text-[#a8a29e]"
                 />
                 <button
                   type="submit"
-                  disabled={readyCount === 0 || !question.trim()}
+                  disabled={
+                    readyCount === 0 || !question.trim() || asking
+                  }
                   className="rounded-md bg-[#2f4f3a] px-4 py-2.5 text-sm font-medium text-[#f4f7f4] transition hover:bg-[#243d2d] disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  Ask
+                  {asking ? "…" : "Ask"}
                 </button>
               </div>
             </form>

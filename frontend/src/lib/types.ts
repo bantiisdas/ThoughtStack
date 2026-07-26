@@ -26,3 +26,55 @@ export type Notebook = {
   _count?: { sources: number };
   sources?: SourceSummary[];
 };
+
+export type CitationLocator = {
+  page?: number;
+  startChar?: number;
+  endChar?: number;
+  startMs?: number;
+  endMs?: number;
+  url?: string;
+};
+
+export type Citation = {
+  citationId: string;
+  sourceId: string;
+  sourceType: SourceType;
+  sourceTitle: string;
+  chunkId: string;
+  snippet: string;
+  locator: CitationLocator;
+};
+
+export type QueryMeta = {
+  attempts: number;
+  grade: number;
+  grades: number[];
+};
+
+export type ChatMessage = {
+  id: string;
+  role: "user" | "assistant" | string;
+  content: string;
+  citations: Citation[] | null;
+  meta: QueryMeta | null;
+  createdAt: string;
+};
+
+export type Conversation = {
+  id: string;
+  notebookId: string;
+  title: string | null;
+  createdAt: string;
+  updatedAt: string;
+  messages: ChatMessage[];
+};
+
+export type QueryResponse = {
+  answer: string;
+  citations: Citation[];
+  meta: QueryMeta;
+  conversationId: string;
+  userMessageId: string;
+  assistantMessageId: string;
+};

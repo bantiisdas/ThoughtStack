@@ -97,3 +97,44 @@ export async function upsertChunkPoints(
     })),
   });
 }
+
+export type NotebookSearchHit = {
+  chunkId: string;
+  score: number;
+  payload: ChunkPointPayload;
+};
+
+/**
+ * Similarity search filtered to a single notebook (KB isolation).
+ */
+export async function searchNotebookVectors(
+  notebookId: string,
+  vector: number[],
+  limit = 10,
+): Promise<NotebookSearchHit[]> {
+  const results = await qdrant.search(QDRANT_COLLECTION, {
+    vector,
+    limit,
+    with_payload: true,
+    filter: {
+      must: [
+        {
+          key: "notebookId",
+          match: { value: notebookId },
+        },
+      ],
+    },
+  });
+
+  const hits: NotebookSearchHit[] = [];
+  for (const point of results) {
+    const payload = point.payload as ChunkPointPayload | null | undefined;
+    if (!payload?.chunkId) continue;
+    hits.push({
+      chunkId: payload.chunkId,
+      score: point.score ?? 0,
+      payload,
+    });
+  }
+  return hits;
+}

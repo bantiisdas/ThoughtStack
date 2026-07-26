@@ -33,3 +33,18 @@ export async function ensureQdrantCollection(): Promise<void> {
 
   console.log(`Created Qdrant collection "${QDRANT_COLLECTION}"`);
 }
+
+/** Delete all vector points belonging to a notebook (isolation cleanup). */
+export async function deletePointsByNotebookId(notebookId: string): Promise<void> {
+  await qdrant.delete(QDRANT_COLLECTION, {
+    wait: true,
+    filter: {
+      must: [
+        {
+          key: "notebookId",
+          match: { value: notebookId },
+        },
+      ],
+    },
+  });
+}

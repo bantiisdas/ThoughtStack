@@ -7,6 +7,7 @@ import { env } from "./config/env.js";
 import { ensureQdrantCollection } from "./lib/qdrant.js";
 import { healthRouter } from "./routes/health.js";
 import { meRouter } from "./routes/me.js";
+import { notebooksRouter } from "./routes/notebooks.js";
 
 const app = express();
 
@@ -26,6 +27,7 @@ if (!fs.existsSync(uploadDir)) {
 
 app.use(healthRouter);
 app.use("/api", meRouter);
+app.use("/api", notebooksRouter);
 
 app.get("/", (_req, res) => {
   res.json({

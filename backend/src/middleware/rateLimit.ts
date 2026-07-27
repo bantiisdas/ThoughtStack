@@ -61,3 +61,10 @@ export const queryLimiter = createRateLimiter({
   max: 10,
   message: "Too many questions. Wait a moment and try again.",
 });
+
+/** Podcast generation is expensive (LLM + TTS): 5 per minute per client. */
+export const podcastWriteLimiter = createRateLimiter({
+  windowMs: 60_000,
+  max: 5,
+  message: "Too many podcast requests. Try again in a minute.",
+});

@@ -95,3 +95,31 @@ export type QueryResponse = {
   userMessageId: string;
   assistantMessageId: string;
 };
+
+export type PodcastStatus = "PENDING" | "GENERATING" | "READY" | "FAILED";
+
+export type PodcastSpeaker = "host" | "guest";
+
+export type PodcastTurn = {
+  speaker: PodcastSpeaker;
+  text: string;
+};
+
+export type PodcastScript = {
+  title: string;
+  turns: PodcastTurn[];
+};
+
+export type PodcastSummary = {
+  id: string;
+  notebookId: string;
+  title: string;
+  status: PodcastStatus;
+  errorMessage: string | null;
+  script: PodcastScript | null;
+  mimeType: string | null;
+  durationSeconds: number | null;
+  sourceIds: string[] | null;
+  createdAt: string;
+  updatedAt: string;
+};

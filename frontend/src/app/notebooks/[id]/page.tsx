@@ -8,6 +8,7 @@ import { AppHeader } from "@/components/AppHeader";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { ErrorBanner } from "@/components/ErrorBanner";
 import { MarkdownContent } from "@/components/MarkdownContent";
+import { PodcastStatusBadge } from "@/components/PodcastStatusBadge";
 import {
   SourceViewer,
   type SourceViewerTarget,
@@ -17,9 +18,17 @@ import {
   formatFileSize,
   MAX_FILE_BYTES,
   MAX_FILE_MB,
+  MAX_PODCAST_DURATION_MINUTES,
+  MAX_PODCASTS_PER_NOTEBOOK,
   MAX_SOURCES_PER_NOTEBOOK,
 } from "@/lib/limits";
 import { getNotebook, updateNotebook } from "@/lib/notebooks";
+import {
+  createPodcast,
+  deletePodcast,
+  getPodcastAudioBlob,
+  listPodcasts,
+} from "@/lib/podcasts";
 import { getLatestConversation, queryNotebook } from "@/lib/query";
 import {
   addUrlSource,
@@ -31,12 +40,15 @@ import type {
   ChatMessage,
   Citation,
   Notebook,
+  PodcastStatus,
+  PodcastSummary,
   SourceStatus,
   SourceType,
 } from "@/lib/types";
 import { fetchYoutubeTranscript } from "@/lib/youtube";
 
 const IN_FLIGHT: SourceStatus[] = ["UPLOADING", "INDEXING"];
+const PODCAST_IN_FLIGHT: PodcastStatus[] = ["PENDING", "GENERATING"];
 const POLL_MS = 2500;
 
 const FILE_ACCEPT =
@@ -98,12 +110,26 @@ export default function NotebookWorkspacePage() {
     id: string;
     title: string;
   } | null>(null);
+  const [podcasts, setPodcasts] = useState<PodcastSummary[]>([]);
+  const [generatingPodcast, setGeneratingPodcast] = useState(false);
+  const [busyPodcastId, setBusyPodcastId] = useState<string | null>(null);
+  const [pendingDeletePodcast, setPendingDeletePodcast] = useState<{
+    id: string;
+    title: string;
+  } | null>(null);
+  const [expandedScriptId, setExpandedScriptId] = useState<string | null>(null);
+  const [audioUrls, setAudioUrls] = useState<Record<string, string>>({});
   const [viewer, setViewer] = useState<{
     token: string;
     target: SourceViewerTarget;
   } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const audioUrlsRef = useRef<Record<string, string>>({});
+
+  useEffect(() => {
+    audioUrlsRef.current = audioUrls;
+  }, [audioUrls]);
 
   const openSourceViewer = useCallback(
     async (target: SourceViewerTarget) => {
@@ -195,8 +221,43 @@ export default function NotebookWorkspacePage() {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, asking]);
 
+  const loadPodcasts = useCallback(
+    async (opts?: { quiet?: boolean }) => {
+      try {
+        const token = await getToken();
+        if (!token) return;
+        const { podcasts: list } = await listPodcasts(token, notebookId);
+        setPodcasts(list);
+      } catch (err) {
+        if (!opts?.quiet) {
+          setError(
+            err instanceof Error ? err.message : "Failed to load podcasts",
+          );
+        }
+      }
+    },
+    [getToken, notebookId],
+  );
+
+  useEffect(() => {
+    if (!isLoaded || !notebookId) return;
+    void loadPodcasts();
+  }, [isLoaded, notebookId, loadPodcasts]);
+
+  // Revoke blob URLs on unmount.
+  useEffect(() => {
+    return () => {
+      for (const url of Object.values(audioUrlsRef.current)) {
+        URL.revokeObjectURL(url);
+      }
+    };
+  }, []);
+
   const sources = notebook?.sources ?? [];
   const hasInFlight = sources.some((s) => IN_FLIGHT.includes(s.status));
+  const hasPodcastInFlight = podcasts.some((p) =>
+    PODCAST_IN_FLIGHT.includes(p.status),
+  );
 
   // Poll while any source is still uploading/indexing.
   useEffect(() => {
@@ -206,6 +267,55 @@ export default function NotebookWorkspacePage() {
     }, POLL_MS);
     return () => window.clearInterval(id);
   }, [hasInFlight, isLoaded, load]);
+
+  // Poll while any podcast is generating.
+  useEffect(() => {
+    if (!hasPodcastInFlight || !isLoaded) return;
+    const id = window.setInterval(() => {
+      void loadPodcasts({ quiet: true });
+    }, POLL_MS);
+    return () => window.clearInterval(id);
+  }, [hasPodcastInFlight, isLoaded, loadPodcasts]);
+
+  // Fetch audio blobs for READY podcasts that lack a local URL.
+  useEffect(() => {
+    let cancelled = false;
+
+    async function ensureAudio() {
+      const ready = podcasts.filter(
+        (p) => p.status === "READY" && !audioUrls[p.id],
+      );
+      if (ready.length === 0) return;
+      try {
+        const token = await getToken();
+        if (!token || cancelled) return;
+        for (const podcast of ready) {
+          if (cancelled) return;
+          try {
+            const blob = await getPodcastAudioBlob(token, podcast.id);
+            if (cancelled) return;
+            const url = URL.createObjectURL(blob);
+            setAudioUrls((prev) => {
+              if (prev[podcast.id]) {
+                URL.revokeObjectURL(url);
+                return prev;
+              }
+              return { ...prev, [podcast.id]: url };
+            });
+          } catch {
+            // Non-fatal — user can still see metadata.
+          }
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    void ensureAudio();
+    return () => {
+      cancelled = true;
+    };
+  }, [podcasts, audioUrls, getToken]);
 
   function upsertSource(source: NonNullable<Notebook["sources"]>[number]) {
     setNotebook((prev) => {
@@ -391,6 +501,65 @@ export default function NotebookWorkspacePage() {
     } finally {
       setBusySourceId(null);
     }
+  }
+
+  async function handleGeneratePodcast() {
+    if (generatingPodcast || readyCount === 0 || hasPodcastInFlight) return;
+    if (podcasts.length >= MAX_PODCASTS_PER_NOTEBOOK) {
+      setError(
+        `This notebook already has ${MAX_PODCASTS_PER_NOTEBOOK} podcasts (maximum). Delete one to generate another.`,
+      );
+      return;
+    }
+
+    setGeneratingPodcast(true);
+    setError(null);
+    try {
+      const token = await getToken();
+      if (!token) throw new Error("Not authenticated");
+      const { podcast } = await createPodcast(token, notebookId);
+      setPodcasts((prev) => [podcast, ...prev.filter((p) => p.id !== podcast.id)]);
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Failed to start podcast generation",
+      );
+    } finally {
+      setGeneratingPodcast(false);
+    }
+  }
+
+  async function confirmDeletePodcast() {
+    if (!pendingDeletePodcast || busyPodcastId) return;
+    const { id: podcastId } = pendingDeletePodcast;
+
+    setBusyPodcastId(podcastId);
+    setError(null);
+    try {
+      const token = await getToken();
+      if (!token) throw new Error("Not authenticated");
+      await deletePodcast(token, podcastId);
+      setPodcasts((prev) => prev.filter((p) => p.id !== podcastId));
+      setAudioUrls((prev) => {
+        const url = prev[podcastId];
+        if (url) URL.revokeObjectURL(url);
+        const next = { ...prev };
+        delete next[podcastId];
+        return next;
+      });
+      if (expandedScriptId === podcastId) setExpandedScriptId(null);
+      setPendingDeletePodcast(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to delete podcast");
+    } finally {
+      setBusyPodcastId(null);
+    }
+  }
+
+  function formatDuration(seconds: number | null): string {
+    if (seconds == null || seconds <= 0) return "";
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    return `${m}:${String(s).padStart(2, "0")}`;
   }
 
   const readyCount = sources.filter((s) => s.status === "READY").length;
@@ -730,6 +899,136 @@ export default function NotebookWorkspacePage() {
                 </ul>
               )}
             </div>
+
+            {/* Studio / Podcast */}
+            <div className="shrink-0 border-t border-[#e7e5e4] px-4 py-3">
+              <div className="flex items-center justify-between gap-2">
+                <h2 className="text-sm font-semibold tracking-wide text-[#44403c] uppercase">
+                  Studio
+                </h2>
+                <span className="text-xs text-[#a8a29e]">
+                  {podcasts.length}/{MAX_PODCASTS_PER_NOTEBOOK}
+                </span>
+              </div>
+              <p className="mt-1 text-[11px] leading-relaxed text-[#a8a29e]">
+                Host + guest podcast from all ready sources · max{" "}
+                {MAX_PODCAST_DURATION_MINUTES} min
+              </p>
+              <button
+                type="button"
+                disabled={
+                  generatingPodcast ||
+                  readyCount === 0 ||
+                  hasPodcastInFlight ||
+                  podcasts.length >= MAX_PODCASTS_PER_NOTEBOOK
+                }
+                onClick={() => void handleGeneratePodcast()}
+                className="mt-2 w-full rounded-md bg-[#2f4f3a] px-2.5 py-1.5 text-xs font-medium text-[#f4f7f4] transition hover:bg-[#243d2d] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {generatingPodcast || hasPodcastInFlight
+                  ? "Generating…"
+                  : "Generate podcast"}
+              </button>
+
+              {podcasts.length > 0 ? (
+                <ul className="mt-3 max-h-48 space-y-2 overflow-y-auto">
+                  {podcasts.map((podcast) => {
+                    const busy = busyPodcastId === podcast.id;
+                    const inFlight = PODCAST_IN_FLIGHT.includes(podcast.status);
+                    const audioUrl = audioUrls[podcast.id];
+                    const script = podcast.script;
+
+                    return (
+                      <li
+                        key={podcast.id}
+                        className="rounded-md border border-[#e7e5e4] bg-white/60 px-3 py-2"
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <p className="truncate text-sm font-medium text-[#1c1917]">
+                            {podcast.title}
+                          </p>
+                          <PodcastStatusBadge status={podcast.status} />
+                        </div>
+                        {podcast.durationSeconds ? (
+                          <p className="mt-0.5 text-xs text-[#78716c]">
+                            ~{formatDuration(podcast.durationSeconds)}
+                          </p>
+                        ) : null}
+                        {podcast.status === "FAILED" && podcast.errorMessage ? (
+                          <p className="mt-1 text-xs leading-snug text-red-700">
+                            {podcast.errorMessage}
+                          </p>
+                        ) : null}
+
+                        {podcast.status === "READY" && audioUrl ? (
+                          <audio
+                            controls
+                            preload="metadata"
+                            src={audioUrl}
+                            className="mt-2 w-full"
+                          />
+                        ) : null}
+
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          {podcast.status === "READY" && audioUrl ? (
+                            <a
+                              href={audioUrl}
+                              download={`${podcast.title || "podcast"}.mp3`}
+                              className="text-xs font-medium text-[#2f4f3a] hover:underline"
+                            >
+                              Download
+                            </a>
+                          ) : null}
+                          {script ? (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setExpandedScriptId((id) =>
+                                  id === podcast.id ? null : podcast.id,
+                                )
+                              }
+                              className="text-xs font-medium text-[#2f4f3a] hover:underline"
+                            >
+                              {expandedScriptId === podcast.id
+                                ? "Hide script"
+                                : "Script"}
+                            </button>
+                          ) : null}
+                          {!inFlight ? (
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() =>
+                                setPendingDeletePodcast({
+                                  id: podcast.id,
+                                  title: podcast.title,
+                                })
+                              }
+                              className="text-xs font-medium text-red-700 hover:underline disabled:text-[#a8a29e]"
+                            >
+                              Delete
+                            </button>
+                          ) : null}
+                        </div>
+
+                        {expandedScriptId === podcast.id && script ? (
+                          <ol className="mt-2 max-h-40 space-y-1.5 overflow-y-auto rounded-md bg-[#fafaf9] p-2 text-[11px] leading-relaxed text-[#44403c]">
+                            {script.turns.map((turn, i) => (
+                              <li key={`${podcast.id}-turn-${i}`}>
+                                <span className="font-semibold capitalize text-[#2f4f3a]">
+                                  {turn.speaker}:
+                                </span>{" "}
+                                {turn.text}
+                              </li>
+                            ))}
+                          </ol>
+                        ) : null}
+                      </li>
+                    );
+                  })}
+                </ul>
+              ) : null}
+            </div>
           </aside>
 
           {/* Chat panel */}
@@ -884,6 +1183,26 @@ export default function NotebookWorkspacePage() {
         }}
         onConfirm={() => {
           void confirmDeleteSource();
+        }}
+      />
+
+      <ConfirmDialog
+        open={pendingDeletePodcast !== null}
+        title="Delete podcast?"
+        description={
+          pendingDeletePodcast
+            ? `Delete “${pendingDeletePodcast.title}”? The audio file will be removed. This cannot be undone.`
+            : ""
+        }
+        confirmLabel="Delete"
+        danger
+        busy={busyPodcastId === pendingDeletePodcast?.id}
+        onCancel={() => {
+          if (busyPodcastId) return;
+          setPendingDeletePodcast(null);
+        }}
+        onConfirm={() => {
+          void confirmDeletePodcast();
         }}
       />
     </main>

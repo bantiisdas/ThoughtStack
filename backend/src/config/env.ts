@@ -22,6 +22,12 @@ const envSchema = z.object({
     .string()
     .min(1, "SUPABASE_SERVICE_ROLE_KEY is required"),
   SUPABASE_STORAGE_BUCKET: z.string().min(1).default("sources"),
+  /** ElevenLabs — required at podcast generation time. */
+  ELEVENLABS_API_KEY: z.string().optional(),
+  /** Male host voice (default: Adam). */
+  ELEVENLABS_HOST_VOICE_ID: z.string().min(1).default("pNInz6obpgDQGcFmaJgB"),
+  /** Female guest voice (default: Sarah). */
+  ELEVENLABS_GUEST_VOICE_ID: z.string().min(1).default("EXAVITQu4vr4xnSDxMaL"),
   /** Comma-separated allowed frontends, e.g. https://app.vercel.app,http://localhost:3000 */
   CORS_ORIGIN: z
     .string()

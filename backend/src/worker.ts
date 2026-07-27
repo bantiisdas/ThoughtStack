@@ -1,5 +1,7 @@
 /**
- * BullMQ worker: processes `source-index` jobs (extract → chunk → embed → Qdrant).
+ * BullMQ workers:
+ * - `source-index` — extract → chunk → embed → Qdrant
+ * - `podcast-generate` — LLM script → ElevenLabs TTS → Supabase
  *
  * Run alongside the API: `npm run worker`
  */
@@ -11,7 +13,12 @@ import {
   SOURCE_INDEX_QUEUE,
   type SourceIndexJobData,
 } from "./queues/sourceIndex.js";
+import {
+  PODCAST_GENERATE_QUEUE,
+  type PodcastGenerateJobData,
+} from "./queues/podcastGenerate.js";
 import { indexSource } from "./services/ingest.js";
+import { generatePodcast } from "./services/podcastGenerate.js";
 
 async function main() {
   try {
@@ -25,7 +32,7 @@ async function main() {
 
   const connection = createRedisConnection();
 
-  const worker = new Worker<SourceIndexJobData>(
+  const sourceWorker = new Worker<SourceIndexJobData>(
     SOURCE_INDEX_QUEUE,
     async (job) => {
       console.log(
@@ -39,20 +46,35 @@ async function main() {
     },
   );
 
-  worker.on("completed", (job) => {
-    console.log(`[worker] Job ${job.id} completed`);
-  });
+  const podcastWorker = new Worker<PodcastGenerateJobData>(
+    PODCAST_GENERATE_QUEUE,
+    async (job) => {
+      console.log(
+        `[worker] Job ${job.id} generating podcast ${job.data.podcastId}`,
+      );
+      await generatePodcast(job.data.podcastId);
+    },
+    {
+      connection: createRedisConnection(),
+      concurrency: 1,
+    },
+  );
 
-  worker.on("failed", (job, err) => {
-    console.error(
-      `[worker] Job ${job?.id} failed:`,
-      err instanceof Error ? err.message : err,
-    );
-  });
+  for (const worker of [sourceWorker, podcastWorker]) {
+    worker.on("completed", (job) => {
+      console.log(`[worker] Job ${job.id} completed`);
+    });
+    worker.on("failed", (job, err) => {
+      console.error(
+        `[worker] Job ${job?.id} failed:`,
+        err instanceof Error ? err.message : err,
+      );
+    });
+  }
 
   const shutdown = async () => {
     console.log("[worker] Shutting down…");
-    await worker.close();
+    await Promise.all([sourceWorker.close(), podcastWorker.close()]);
     await connection.quit();
     process.exit(0);
   };
@@ -60,7 +82,9 @@ async function main() {
   process.on("SIGINT", () => void shutdown());
   process.on("SIGTERM", () => void shutdown());
 
-  console.log(`ThoughtStack worker listening on queue "${SOURCE_INDEX_QUEUE}"`);
+  console.log(
+    `ThoughtStack worker listening on queues "${SOURCE_INDEX_QUEUE}", "${PODCAST_GENERATE_QUEUE}"`,
+  );
 }
 
 main().catch((error) => {

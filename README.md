@@ -1,6 +1,6 @@
 # ThoughtStack
 
-NotebookLM-style RAG app: isolated notebooks, multi-source ingest, and an advanced query pipeline (step-back, rewrite, sub-queries, HyDE, multi-vector search, RRF, grade-and-retry).
+NotebookLM-style RAG app: isolated notebooks, multi-source ingest, an advanced query pipeline (step-back, rewrite, sub-queries, HyDE, multi-vector search, RRF, grade-and-retry), and host/guest podcast generation via ElevenLabs.
 
 ## Stack
 
@@ -33,6 +33,7 @@ ThoughtStack/
 - [Qdrant Cloud](https://cloud.qdrant.io) cluster (URL + API key)
 - [Clerk](https://clerk.com) application (publishable + secret keys)
 - OpenAI API key
+- [ElevenLabs](https://elevenlabs.io) API key (podcast TTS)
 
 ## Quick start
 
@@ -61,7 +62,7 @@ npm run dev
 
 API defaults to **http://localhost:4000**.
 
-In a second terminal, start the indexing worker:
+In a second terminal, start the worker (source indexing + podcast generation):
 
 ```bash
 cd backend
@@ -71,7 +72,7 @@ npm run worker
 | Script | Purpose |
 | --- | --- |
 | `npm run dev` | API with `tsx watch` |
-| `npm run worker` | BullMQ `source-index` worker |
+| `npm run worker` | BullMQ `source-index` + `podcast-generate` worker |
 | `npm run prisma:migrate` | Run migrations against Neon |
 | `npm run prisma:generate` | Regenerate Prisma client |
 
@@ -92,7 +93,7 @@ App defaults to **http://localhost:3000**.
 - `/` — landing + Clerk sign-in/up
 - `/sign-in`, `/sign-up` — Clerk components
 - `/notebooks` — notebook list (protected)
-- `/notebooks/[id]` — workspace: sources + chat + source viewers
+- `/notebooks/[id]` — workspace: sources + Studio (podcasts) + chat + source viewers
 
 `NEXT_PUBLIC_API_URL` should point at the Express API (e.g. `http://localhost:4000`).
 
@@ -119,6 +120,9 @@ Copy the example files and fill in real values:
 | `SUPABASE_URL` | Supabase project URL |
 | `SUPABASE_SERVICE_ROLE_KEY` | Service role key (server-only) |
 | `SUPABASE_STORAGE_BUCKET` | Storage bucket name (default `sources`) |
+| `ELEVENLABS_API_KEY` | Podcast TTS (required at generation time) |
+| `ELEVENLABS_HOST_VOICE_ID` | Male host voice (default Adam) |
+| `ELEVENLABS_GUEST_VOICE_ID` | Female guest voice (default Sarah) |
 
 ### `frontend/.env.local`
 
@@ -151,17 +155,23 @@ flowchart TB
     Redis[(Redis)]
     Qdrant[(Qdrant)]
     OpenAI[OpenAI API]
+    ElevenLabs[ElevenLabs]
+    Supabase[(Supabase Storage)]
   end
 
   UI --> ClerkFE
   UI -->|Bearer JWT| REST
   REST --> Neon
-  REST -->|enqueue index| Redis
+  REST -->|enqueue index / podcast| Redis
   Worker --> Redis
   Worker --> Ingest
+  Worker -->|podcast script + TTS| OpenAI
+  Worker --> ElevenLabs
+  Worker --> Supabase
   Ingest --> Neon
   Ingest --> Qdrant
   Ingest --> OpenAI
+  Ingest --> Supabase
   REST --> QueryPipe
   QueryPipe --> Qdrant
   QueryPipe --> OpenAI
@@ -170,10 +180,21 @@ flowchart TB
 
 **Isolation:** every Qdrant point stores `notebookId` + `sourceId`; searches always filter by `notebookId`.
 
-**Two pipelines:**
+**Three pipelines:**
 
 1. **Ingest** — document → extract → chunk → embed → Qdrant (+ Chunk rows in Neon)
 2. **Query** — plan/rewrite/sub-queries + HyDE → multi-vector search → RRF (top 5) → grounded answer → grade/retry (max 3)
+3. **Podcast** — all READY sources → LLM host/guest script (≤ ~5 min) → ElevenLabs Text-to-Dialogue → MP3 in Supabase
+
+## Podcast generation
+
+From a notebook with at least one **Ready** source, use the **Studio** panel:
+
+1. Click **Generate podcast** (uses all READY sources; host = male, guest = female).
+2. Worker writes a ~4–5 minute dialogue with OpenAI, then synthesizes audio with ElevenLabs (batched ≤2k chars / request).
+3. When status is **Ready**, play or download the MP3; expand **Script** to read turns.
+
+Limits: max **5 podcasts** per notebook; one generation in flight per notebook; spoken length capped at **~5 minutes**.
 
 ## Submission limits
 
@@ -181,8 +202,11 @@ flowchart TB
 | --- | --- |
 | Max upload size | **20 MB** (PDF / TEXT / VTT) |
 | Max sources per notebook | **25** |
+| Max podcasts per notebook | **5** |
+| Max podcast duration | **~5 minutes** |
 | Source write rate | 30 / minute / client |
 | Query rate | 10 / minute / client |
+| Podcast write rate | 5 / minute / client |
 
 Oversized files are rejected in the UI before upload and by Multer on the API (`413` with a clear error).
 
@@ -206,10 +230,13 @@ Use this walkthrough for a grading / assignment demo (about 5–8 minutes).
 6. **Citations**
    - Every assistant answer shows citation chips under the message.
    - Click a chip → source viewer opens at the relevant locus (PDF page, YouTube timestamp, text highlight, website preview).
-7. **Failure / retry**
+7. **Generate a podcast** (optional)
+   - In **Studio**, click **Generate podcast** once sources are Ready.
+   - Wait for Queued → Generating → Ready, then play / download the MP3.
+8. **Failure / retry**
    - If indexing fails, the source shows an error and a **Retry** action.
-8. **Cleanup**
-   - Delete a source or notebook via the confirm dialog (cascade removes DB rows + Qdrant points).
+9. **Cleanup**
+   - Delete a source, podcast, or notebook via the confirm dialog.
 
 Optional talking points while demos run:
 
@@ -249,7 +276,7 @@ docker compose logs -f caddy
 
 ## Notes
 
-- Source files (PDF / TEXT / VTT / YouTube transcripts) are stored in Supabase Storage.
+- Source files (PDF / TEXT / VTT / YouTube transcripts) and generated podcast MP3s are stored in Supabase Storage.
 - Install backend deps with `--legacy-peer-deps` if npm reports LangChain optional-peer conflicts (an `.npmrc` is included).
 - Run `npx prisma migrate dev` only after `DATABASE_URL` / `DIRECT_URL` point at a real Neon database.
 - Frontend `README.md` is the stock Next.js file; use this root README for product setup.

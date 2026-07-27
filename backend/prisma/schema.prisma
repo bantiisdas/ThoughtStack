@@ -23,6 +23,13 @@ enum SourceStatus {
   FAILED
 }
 
+enum PodcastStatus {
+  PENDING
+  GENERATING
+  READY
+  FAILED
+}
+
 model User {
   id        String     @id @default(cuid())
   clerkId   String     @unique
@@ -42,6 +49,7 @@ model Notebook {
   sources     Source[]
   chunks      Chunk[]
   conversations Conversation[]
+  podcasts    Podcast[]
   createdAt   DateTime       @default(now())
   updatedAt   DateTime       @updatedAt
 
@@ -108,4 +116,23 @@ model Message {
   createdAt      DateTime     @default(now())
 
   @@index([conversationId])
+}
+
+model Podcast {
+  id             String        @id @default(cuid())
+  notebookId     String
+  notebook       Notebook      @relation(fields: [notebookId], references: [id], onDelete: Cascade)
+  title          String
+  status         PodcastStatus @default(PENDING)
+  errorMessage   String?
+  script         Json?
+  storagePath    String?
+  mimeType       String?
+  durationSeconds Int?
+  sourceIds      Json?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  @@index([notebookId])
+  @@index([status])
 }

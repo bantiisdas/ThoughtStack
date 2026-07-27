@@ -9,7 +9,10 @@ const envSchema = z.object({
   DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
   DIRECT_URL: z.string().optional(),
   REDIS_URL: z.string().default("redis://localhost:6379"),
-  QDRANT_URL: z.string().default("http://localhost:6333"),
+  /** Qdrant Cloud cluster URL, e.g. https://xxxx.aws.cloud.qdrant.io */
+  QDRANT_URL: z.string().url("QDRANT_URL must be a valid URL"),
+  /** Qdrant Cloud API key (required for authenticated clusters) */
+  QDRANT_API_KEY: z.string().min(1, "QDRANT_API_KEY is required"),
   OPENAI_API_KEY: z.string().optional(),
   CLERK_PUBLISHABLE_KEY: z.string().min(1, "CLERK_PUBLISHABLE_KEY is required"),
   CLERK_SECRET_KEY: z.string().min(1, "CLERK_SECRET_KEY is required"),

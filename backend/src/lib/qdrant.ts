@@ -4,7 +4,10 @@ import { env } from "../config/env.js";
 export const QDRANT_COLLECTION = "thoughtstack";
 export const EMBEDDING_DIMENSIONS = 1536;
 
-export const qdrant = new QdrantClient({ url: env.QDRANT_URL });
+export const qdrant = new QdrantClient({
+  url: env.QDRANT_URL,
+  apiKey: env.QDRANT_API_KEY,
+});
 
 export async function ensureQdrantCollection(): Promise<void> {
   const collections = await qdrant.getCollections();

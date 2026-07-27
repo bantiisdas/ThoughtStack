@@ -9,7 +9,7 @@ NotebookLM-style RAG app: isolated notebooks, multi-source ingest, and an advanc
 | Frontend | Next.js (App Router) + Tailwind + Clerk |
 | Backend | Express + TypeScript |
 | DB | Prisma + Neon (serverless Postgres) |
-| Vector DB | Qdrant |
+| Vector DB | Qdrant Cloud |
 | Queue | BullMQ + Redis |
 | RAG | LangChain.js + OpenAI embeddings / `gpt-4o-mini` |
 
@@ -20,7 +20,7 @@ ThoughtStack/
 ├── frontend/           # Next.js UI (Clerk)
 ├── backend/            # Express API + BullMQ worker
 ├── Caddyfile           # HTTPS reverse proxy for the API
-├── docker-compose.yml  # redis + qdrant + api + worker + caddy
+├── docker-compose.yml  # redis + api + worker + caddy
 └── README.md
 ```
 
@@ -28,14 +28,15 @@ ThoughtStack/
 ## Prerequisites
 
 - Node.js 20+
-- Docker Desktop (for Redis + Qdrant)
+- Docker Desktop (for Redis)
 - [Neon](https://neon.tech) project (Postgres connection strings)
+- [Qdrant Cloud](https://cloud.qdrant.io) cluster (URL + API key)
 - [Clerk](https://clerk.com) application (publishable + secret keys)
 - OpenAI API key
 
 ## Quick start
 
-### 1. Infra (Redis + Qdrant)
+### 1. Infra (Redis)
 
 From the repo root:
 
@@ -44,9 +45,8 @@ docker compose up -d
 ```
 
 - Redis: `localhost:6379`
-- Qdrant: `http://localhost:6333`
 
-Neon is cloud-only — no Postgres container.
+Neon and Qdrant are cloud-only — no Postgres or Qdrant containers.
 
 ### 2. Backend
 
@@ -111,7 +111,8 @@ Copy the example files and fill in real values:
 | `DATABASE_URL` | Neon **pooled** connection string |
 | `DIRECT_URL` | Neon **direct** URL for Prisma migrate |
 | `REDIS_URL` | `redis://localhost:6379` |
-| `QDRANT_URL` | `http://localhost:6333` |
+| `QDRANT_URL` | Qdrant Cloud cluster URL |
+| `QDRANT_API_KEY` | Qdrant Cloud API key |
 | `OPENAI_API_KEY` | Embeddings + LLM |
 | `CLERK_PUBLISHABLE_KEY` / `CLERK_SECRET_KEY` | Backend JWT verify |
 | `CORS_ORIGIN` | Frontend origin (`http://localhost:3000`) |

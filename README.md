@@ -1,202 +1,230 @@
 # ThoughtStack
 
-NotebookLM-style RAG app: isolated notebooks, multi-source ingest, an advanced query pipeline (step-back, rewrite, sub-queries, HyDE, multi-vector search, RRF, grade-and-retry), and host/guest podcast generation via ElevenLabs.
+NotebookLM-style RAG workspace: **isolated notebooks**, multi-source ingest, grounded chat with citations, source viewers, and **host/guest podcast generation**.
+
+**Live demo:** [https://thought-stack-ai.vercel.app/](https://thought-stack-ai.vercel.app/)
+
+---
+
+## Features
+
+| Area | What you get |
+| --- | --- |
+| **Notebooks** | Create, rename, delete; each notebook is its own knowledge base |
+| **Sources** | PDF, TEXT (`.txt`/`.md`), Website, YouTube (captions), VTT |
+| **Ingest** | Async extract → chunk → embed → Qdrant; status badges + retry |
+| **Chat** | Advanced RAG answers with citation chips and grade/attempt metadata |
+| **Viewers** | Jump to PDF page, YouTube timestamp, text/VTT highlight, website preview |
+| **Studio** | Generate a ~5 min host/guest podcast (ElevenLabs) from READY sources |
+| **Auth** | Clerk sign-in/up; API protected with Bearer JWT |
+
+### Workspace (`/notebooks/[id]`)
+
+1. **Sources** — upload files or add URLs; poll Uploading → Indexing → Ready / Failed  
+2. **Studio** — generate / play / download podcasts; view dialogue script  
+3. **Chat** — ask once ≥1 source is Ready; click citations to open the locus  
+
+---
 
 ## Stack
 
 | Layer | Choice |
 | --- | --- |
 | Frontend | Next.js (App Router) + Tailwind + Clerk |
-| Backend | Express + TypeScript |
-| DB | Prisma + Neon (serverless Postgres) |
-| Vector DB | Qdrant Cloud |
-| Queue | BullMQ + Redis |
-| RAG | LangChain.js + OpenAI embeddings / `gpt-4o-mini` |
+| Backend | Express + TypeScript + BullMQ worker |
+| DB | Prisma + Neon (Postgres) |
+| Object storage | Supabase Storage (sources + podcast MP3s) |
+| Vector DB | Qdrant Cloud (`text-embedding-3-small`, 1536-dim) |
+| Queue | Redis + BullMQ |
+| LLM / embeddings | OpenAI (`gpt-4o-mini`, `text-embedding-3-small`) |
+| Podcast TTS | ElevenLabs Text-to-Dialogue (host + guest voices) |
+| Deploy | Frontend on Vercel; API via Docker + optional Caddy HTTPS |
 
-Apps are **separate packages** (no monorepo tooling). Install and run each independently.
+Apps are **separate packages** (no monorepo tooling).
 
 ```
 ThoughtStack/
-├── frontend/           # Next.js UI (Clerk)
-├── backend/            # Express API + BullMQ worker
-├── Caddyfile           # HTTPS reverse proxy for the API
-├── docker-compose.yml  # redis + api + worker + caddy
+├── frontend/            # Next.js UI (Clerk)
+├── backend/             # Express API + BullMQ worker
+│   ├── prisma/
+│   └── src/
+│       ├── routes/      # notebooks, sources, query, podcasts
+│       ├── services/    # ingest, queryPipeline, podcast*, extractors
+│       ├── queues/      # source-index, podcast-generate
+│       └── worker.ts
+├── Caddyfile            # HTTPS reverse proxy (profile: https)
+├── docker-compose.yml   # redis + api + worker (+ caddy)
 └── README.md
 ```
 
-
-## Prerequisites
-
-- Node.js 20+
-- Docker Desktop (for Redis)
-- [Neon](https://neon.tech) project (Postgres connection strings)
-- [Qdrant Cloud](https://cloud.qdrant.io) cluster (URL + API key)
-- [Clerk](https://clerk.com) application (publishable + secret keys)
-- OpenAI API key
-- [ElevenLabs](https://elevenlabs.io) API key (podcast TTS)
-
-## Quick start
-
-### 1. Infra (Redis)
-
-From the repo root:
-
-```bash
-docker compose up -d
-```
-
-- Redis: `localhost:6379`
-
-Neon and Qdrant are cloud-only — no Postgres or Qdrant containers.
-
-### 2. Backend
-
-```bash
-cd backend
-cp .env.example .env
-# Fill DATABASE_URL, DIRECT_URL, Clerk keys, OPENAI_API_KEY, etc.
-npm install --legacy-peer-deps
-npx prisma migrate dev
-npm run dev
-```
-
-API defaults to **http://localhost:4000**.
-
-In a second terminal, start the worker (source indexing + podcast generation):
-
-```bash
-cd backend
-npm run worker
-```
-
-| Script | Purpose |
-| --- | --- |
-| `npm run dev` | API with `tsx watch` |
-| `npm run worker` | BullMQ `source-index` + `podcast-generate` worker |
-| `npm run prisma:migrate` | Run migrations against Neon |
-| `npm run prisma:generate` | Regenerate Prisma client |
-
-Health check: `GET /health` (API + Neon + Qdrant).
-
-### 3. Frontend
-
-```bash
-cd frontend
-cp .env.example .env.local
-# Set NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY, CLERK_SECRET_KEY, NEXT_PUBLIC_API_URL
-npm install
-npm run dev
-```
-
-App defaults to **http://localhost:3000**.
-
-- `/` — landing + Clerk sign-in/up
-- `/sign-in`, `/sign-up` — Clerk components
-- `/notebooks` — notebook list (protected)
-- `/notebooks/[id]` — workspace: sources + Studio (podcasts) + chat + source viewers
-
-`NEXT_PUBLIC_API_URL` should point at the Express API (e.g. `http://localhost:4000`).
-
-## Env vars
-
-Copy the example files and fill in real values:
-
-- `backend/.env.example` → `backend/.env`
-- `frontend/.env.example` → `frontend/.env.local`
-
-### `backend/.env`
-
-| Variable | Notes |
-| --- | --- |
-| `PORT` | API port (default `4000`) |
-| `DATABASE_URL` | Neon **pooled** connection string |
-| `DIRECT_URL` | Neon **direct** URL for Prisma migrate |
-| `REDIS_URL` | `redis://localhost:6379` |
-| `QDRANT_URL` | Qdrant Cloud cluster URL |
-| `QDRANT_API_KEY` | Qdrant Cloud API key |
-| `OPENAI_API_KEY` | Embeddings + LLM |
-| `CLERK_PUBLISHABLE_KEY` / `CLERK_SECRET_KEY` | Backend JWT verify |
-| `CORS_ORIGIN` | Frontend origin (`http://localhost:3000`) |
-| `SUPABASE_URL` | Supabase project URL |
-| `SUPABASE_SERVICE_ROLE_KEY` | Service role key (server-only) |
-| `SUPABASE_STORAGE_BUCKET` | Storage bucket name (default `sources`) |
-| `ELEVENLABS_API_KEY` | Podcast TTS (required at generation time) |
-| `ELEVENLABS_HOST_VOICE_ID` | Male host voice (default Adam) |
-| `ELEVENLABS_GUEST_VOICE_ID` | Female guest voice (default Sarah) |
-
-### `frontend/.env.local`
-
-| Variable | Notes |
-| --- | --- |
-| `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | Clerk publishable key |
-| `CLERK_SECRET_KEY` | Clerk secret (Next middleware) |
-| `NEXT_PUBLIC_API_URL` | Express base URL |
-| `NEXT_PUBLIC_CLERK_SIGN_IN_URL` | `/sign-in` |
-| `NEXT_PUBLIC_CLERK_SIGN_UP_URL` | `/sign-up` |
+---
 
 ## Architecture
 
 ```mermaid
 flowchart TB
-  subgraph client [Frontend]
-    UI[Next.js notebook UI]
+  subgraph client [Frontend — Vercel]
+    UI[Notebook workspace]
     ClerkFE[Clerk Auth]
+    YTRoute["/api/youtube-transcript"]
   end
 
-  subgraph api [Backend]
+  subgraph api [Backend — Docker]
     REST[Express REST API]
     Worker[BullMQ Worker]
-    Ingest[Extract → Chunk → Embed]
-    QueryPipe[Advanced query pipeline]
+    Ingest[Ingest pipeline]
+    QueryPipe[Query pipeline]
+    Podcast[Podcast pipeline]
   end
 
-  subgraph data [Infra]
+  subgraph data [Managed infra]
     Neon[(Neon Postgres)]
     Redis[(Redis)]
-    Qdrant[(Qdrant)]
-    OpenAI[OpenAI API]
-    ElevenLabs[ElevenLabs]
+    Qdrant[(Qdrant Cloud)]
     Supabase[(Supabase Storage)]
+    OpenAI[OpenAI]
+    ElevenLabs[ElevenLabs]
   end
 
   UI --> ClerkFE
   UI -->|Bearer JWT| REST
+  UI --> YTRoute
+  YTRoute -->|captionsVtt| REST
   REST --> Neon
-  REST -->|enqueue index / podcast| Redis
+  REST -->|enqueue jobs| Redis
   Worker --> Redis
   Worker --> Ingest
-  Worker -->|podcast script + TTS| OpenAI
-  Worker --> ElevenLabs
-  Worker --> Supabase
-  Ingest --> Neon
-  Ingest --> Qdrant
+  Worker --> Podcast
   Ingest --> OpenAI
+  Ingest --> Qdrant
+  Ingest --> Neon
   Ingest --> Supabase
+  Podcast --> OpenAI
+  Podcast --> ElevenLabs
+  Podcast --> Supabase
   REST --> QueryPipe
-  QueryPipe --> Qdrant
   QueryPipe --> OpenAI
+  QueryPipe --> Qdrant
   QueryPipe --> Neon
 ```
 
-**Isolation:** every Qdrant point stores `notebookId` + `sourceId`; searches always filter by `notebookId`.
+**Isolation:** every Qdrant point stores `notebookId` + `sourceId`. Searches always filter by `notebookId`, so notebooks never share a knowledge base.
 
 **Three pipelines:**
 
-1. **Ingest** — document → extract → chunk → embed → Qdrant (+ Chunk rows in Neon)
-2. **Query** — plan/rewrite/sub-queries + HyDE → multi-vector search → RRF (top 5) → grounded answer → grade/retry (max 3)
-3. **Podcast** — all READY sources → LLM host/guest script (≤ ~5 min) → ElevenLabs Text-to-Dialogue → MP3 in Supabase
+1. **Ingest** — extract → chunk → embed → Qdrant (+ Chunk rows in Neon)  
+2. **Query** — plan + HyDE → multi-vector search → RRF → grounded answer → grade/retry  
+3. **Podcast** — READY sources → host/guest script → ElevenLabs TTS → MP3 in Supabase  
 
-## Podcast generation
+---
 
-From a notebook with at least one **Ready** source, use the **Studio** panel:
+## Ingest / embedding pipeline
 
-1. Click **Generate podcast** (uses all READY sources; host = male, guest = female).
-2. Worker writes a ~4–5 minute dialogue with OpenAI, then synthesizes audio with ElevenLabs (batched ≤2k chars / request).
-3. When status is **Ready**, play or download the MP3; expand **Script** to read turns.
+Sources are indexed asynchronously so uploads return immediately and the UI polls status.
 
-Limits: max **5 podcasts** per notebook; one generation in flight per notebook; spoken length capped at **~5 minutes**.
+```mermaid
+flowchart LR
+  A[Upload / URL] --> B[Source UPLOADING / INDEXING]
+  B --> C[BullMQ source-index]
+  C --> D[Extract]
+  D --> E[Chunk ~3500 chars / 600 overlap]
+  E --> F[Embed text-embedding-3-small]
+  F --> G[Upsert Qdrant points]
+  G --> H[Persist Chunk rows in Neon]
+  H --> I[Source READY]
+  C -.->|error| J[Source FAILED + Retry]
+```
 
-## Submission limits
+| Step | Detail |
+| --- | --- |
+| Extract | PDF / text / website (Readability) / YouTube captions / VTT |
+| Chunk | LangChain `RecursiveCharacterTextSplitter` (~800–1000 tokens) |
+| Embed | OpenAI `text-embedding-3-small` (1536 dims, cosine) |
+| Store | Qdrant payload: `notebookId`, `sourceId`, `chunkId`, text, locator |
+| Locators | page / char range / startMs–endMs / url — used by citation viewers |
+| Reindex | Deletes prior vectors + chunks for that source, then re-runs |
+
+**YouTube note:** caption fetches from cloud IPs are often blocked, so the frontend fetches transcripts (Next route) and sends them with the URL source when needed.
+
+---
+
+## Query pipeline
+
+Chat uses an advanced retrieval stack, not a single embedding of the raw question.
+
+```mermaid
+flowchart TB
+  Q[User question] --> P[Query plan — one LLM call]
+  Q --> H[HyDE — hypothetical answer]
+  P --> P1[Step-back question]
+  P --> P2[Rewritten question]
+  P --> P3[2–4 sub-queries]
+  P1 --> E[Embed each query string]
+  P2 --> E
+  P3 --> E
+  H --> E
+  E --> S[Parallel dense search in notebook]
+  S --> R[RRF fusion — top 5 chunks]
+  R --> A[Grounded answer with citation ids]
+  A --> G{Grade ≥ 6 / 10?}
+  G -->|yes| Out[Return answer + citations + meta]
+  G -->|no, attempt &lt; 3| K[Add grader keywords]
+  K --> E
+  G -->|keep best after 3| Out
+```
+
+| Step | Purpose |
+| --- | --- |
+| **Step-back** | Broader framing for better retrieval |
+| **Rewrite** | Clearer, search-friendly phrasing |
+| **Sub-queries** | Cover distinct facets of the question |
+| **HyDE** | Embed a short hypothetical answer (retrieval only) |
+| **Multi-vector search** | Dense search per query, filtered by `notebookId` |
+| **RRF** | Fuse ranked lists (`k=60`) → top **5** chunks |
+| **Grounded answer** | `gpt-4o-mini` must cite chunks as `[n]` |
+| **Grade + retry** | Score /10; pass ≥6; else retry with keywords (max **3**); keep best |
+
+UI shows `Grade X/10 · attempt N` under assistant messages for debugging.
+
+---
+
+## Podcast pipeline
+
+```mermaid
+flowchart LR
+  R[All READY sources] --> S[OpenAI host/guest script]
+  S --> T[ElevenLabs Text-to-Dialogue]
+  T --> M[MP3 in Supabase]
+  M --> U[Studio: play / download / script]
+```
+
+- Host = male voice, guest = female voice (configurable voice IDs)  
+- Spoken length capped at **~5 minutes**; max **5** podcasts per notebook  
+- One generation in flight per notebook  
+
+---
+
+## Engineering decisions
+
+| Decision | Why |
+| --- | --- |
+| **Separate frontend / backend packages** | Clear deploy boundaries (Vercel vs Docker); no monorepo tooling overhead for this assignment size |
+| **Notebook-scoped Qdrant filters** | Hard isolation without one collection per notebook |
+| **BullMQ for ingest + podcasts** | Long-running work off the request path; retries and concurrency controls |
+| **Supabase Storage (not local disk)** | API/worker containers stay ephemeral; same files work across deploys |
+| **Qdrant Cloud** | No vector DB container to operate; stable URL + API key |
+| **Advanced query stack (plan / HyDE / RRF / grade)** | Better recall and answer quality than single-query RAG; grader loop reduces weak answers |
+| **Custom RRF helper** | Simple, transparent fusion over parallel hit lists |
+| **Citation locators in Chunk JSON** | Viewers can open the exact page / timestamp / highlight without re-parsing |
+| **YouTube captions via frontend** | Avoids datacenter IP blocks on the VPS |
+| **Clerk JWT on every API call** | Same identity on FE and BE; users upserted on first authenticated request |
+| **In-memory rate limits** | Cheap guardrails for demo traffic (per IP + auth) |
+| **Caddy `https` Compose profile** | Optional Let’s Encrypt TLS so Vercel (HTTPS) can call the API without mixed content |
+| **Prisma 6 + migrate deploy in entrypoint** | Schema stays in sync when containers start |
+
+---
+
+## Limits
 
 | Limit | Value |
 | --- | --- |
@@ -208,61 +236,146 @@ Limits: max **5 podcasts** per notebook; one generation in flight per notebook; 
 | Query rate | 10 / minute / client |
 | Podcast write rate | 5 / minute / client |
 
-Oversized files are rejected in the UI before upload and by Multer on the API (`413` with a clear error).
+---
 
-## Demo script
+## Prerequisites
 
-Use this walkthrough for a grading / assignment demo (about 5–8 minutes).
+- Node.js 20+
+- Docker (Redis + optional full API stack / Caddy)
+- [Neon](https://neon.tech) Postgres
+- [Qdrant Cloud](https://cloud.qdrant.io)
+- [Clerk](https://clerk.com)
+- OpenAI API key
+- [Supabase](https://supabase.com) project (Storage bucket)
+- [ElevenLabs](https://elevenlabs.io) API key (podcasts)
 
-1. **Start infra + apps**
-   - `docker compose up -d`
-   - Backend: `npm run dev` and `npm run worker`
-   - Frontend: `npm run dev`
-2. **Sign in** at http://localhost:3000 with Clerk.
-3. **Create a notebook** on `/notebooks` (e.g. “Demo notes”).
-4. **Add sources** in the workspace:
-   - Upload a `.txt` or `.pdf` (under 20 MB)
-   - Optionally add a website URL and/or YouTube URL with captions
-   - Watch status badges: Uploading → Indexing → **Ready** (polls every ~2.5s)
-5. **Ask a question** once at least one source is Ready.
-   - The Ask button stays disabled until a Ready source exists.
-   - Wait for the graded answer (may take several seconds — multi-step RAG).
-6. **Citations**
-   - Every assistant answer shows citation chips under the message.
-   - Click a chip → source viewer opens at the relevant locus (PDF page, YouTube timestamp, text highlight, website preview).
-7. **Generate a podcast** (optional)
-   - In **Studio**, click **Generate podcast** once sources are Ready.
-   - Wait for Queued → Generating → Ready, then play / download the MP3.
-8. **Failure / retry**
-   - If indexing fails, the source shows an error and a **Retry** action.
-9. **Cleanup**
-   - Delete a source, podcast, or notebook via the confirm dialog.
+---
 
-Optional talking points while demos run:
+## Quick start
 
-- Query path uses step-back + rewrite + sub-queries (one structured LLM call), HyDE, parallel dense search, RRF fusion, grounded answer, grader score /10 with up to 3 attempts.
-- Chat shows grade + attempt count under assistant messages for debugging.
+### 1. Redis
+
+```bash
+docker compose up -d redis
+```
+
+- Redis: `localhost:6379`  
+- Neon, Qdrant, and Supabase are cloud services (no local containers).
+
+### 2. Backend
+
+```bash
+cd backend
+cp .env.example .env
+# Fill DATABASE_URL, DIRECT_URL, QDRANT_*, Clerk, OpenAI, Supabase, ElevenLabs
+npm install --legacy-peer-deps
+npx prisma migrate dev
+npm run dev
+```
+
+Second terminal — worker (indexing + podcasts):
+
+```bash
+cd backend
+npm run worker
+```
+
+| Script | Purpose |
+| --- | --- |
+| `npm run dev` | API with `tsx watch` |
+| `npm run worker` | BullMQ `source-index` + `podcast-generate` |
+| `npm run prisma:migrate` | Migrate against Neon |
+| `npm run prisma:generate` | Regenerate Prisma client |
+
+Health: `GET http://localhost:4000/health`
+
+### 3. Frontend
+
+```bash
+cd frontend
+cp .env.example .env.local
+# Clerk keys + NEXT_PUBLIC_API_URL=http://localhost:4000
+npm install
+npm run dev
+```
+
+| Route | Purpose |
+| --- | --- |
+| `/` | Landing + auth |
+| `/sign-in`, `/sign-up` | Clerk |
+| `/notebooks` | Notebook list |
+| `/notebooks/[id]` | Sources + Studio + Chat + viewers |
+
+### Full stack in Docker
+
+```bash
+# From repo root — builds/runs api + worker + redis
+docker compose up -d --build
+```
+
+---
+
+## Env vars
+
+### `backend/.env`
+
+| Variable | Notes |
+| --- | --- |
+| `PORT` | Default `4000` |
+| `DATABASE_URL` | Neon **pooled** URL |
+| `DIRECT_URL` | Neon **direct** URL (migrations) |
+| `REDIS_URL` | `redis://localhost:6379` |
+| `QDRANT_URL` / `QDRANT_API_KEY` | Qdrant Cloud |
+| `OPENAI_API_KEY` | Embeddings + LLM |
+| `CLERK_PUBLISHABLE_KEY` / `CLERK_SECRET_KEY` | JWT verify |
+| `CORS_ORIGIN` | Comma-separated FE origins |
+| `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` | Storage (server-only) |
+| `SUPABASE_STORAGE_BUCKET` | Default `sources` |
+| `ELEVENLABS_API_KEY` | Podcast TTS |
+| `ELEVENLABS_HOST_VOICE_ID` / `ELEVENLABS_GUEST_VOICE_ID` | Host / guest voices |
+
+### `frontend/.env.local`
+
+| Variable | Notes |
+| --- | --- |
+| `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | Clerk publishable |
+| `CLERK_SECRET_KEY` | Clerk secret (middleware) |
+| `NEXT_PUBLIC_API_URL` | Express base URL |
+| `NEXT_PUBLIC_CLERK_SIGN_IN_URL` | `/sign-in` |
+| `NEXT_PUBLIC_CLERK_SIGN_UP_URL` | `/sign-up` |
+
+---
+
+## Demo script (~5–8 min)
+
+1. Sign in at the app (local or [live demo](https://thought-stack-ai.vercel.app/)).
+2. Create a notebook.
+3. Add sources (PDF / text under 20 MB, and/or website / YouTube).
+4. Wait until status is **Ready**.
+5. Ask a grounded question → wait for the graded answer.
+6. Click citation chips → viewer opens at the locus.
+7. Optional: **Studio → Generate podcast** → play / download when Ready.
+8. Optional: fail a source → **Retry**; delete source / podcast / notebook.
+
+Talking points: step-back + rewrite + sub-queries, HyDE, RRF top-5, grade-and-retry (max 3), notebook isolation in Qdrant.
+
+---
 
 ## Deploy API with HTTPS (Caddy)
 
-Vercel (HTTPS) cannot call a plain `http://IP:4000` API (mixed content). Use Caddy in Compose for Let’s Encrypt TLS.
+Vercel is HTTPS, so the API must be HTTPS too (no `http://IP:4000` — mixed content).
 
-1. Point a DNS **A** record (e.g. `api.yourdomain.com`) at your VPS. Open ports **80** and **443**.
-2. On the server, create root `.env` (see `.env.example`):
-
-```bash
-cp .env.example .env
-# API_DOMAIN=api.yourdomain.com
-# ACME_EMAIL=you@example.com
-```
-
-3. Set `backend/.env` with production values, especially:
+1. DNS **A** record for `api.yourdomain.com` → VPS; open **80** + **443**.
+2. Root `.env` (see `.env.example`):
 
 ```env
+API_DOMAIN=api.yourdomain.com
+ACME_EMAIL=you@example.com
 CORS_ORIGIN=https://thought-stack-ai.vercel.app
 ```
 
-4. Start the stack **with the HTTPS profile** (enables Caddy):
+3. `backend/.env` with production secrets; `CORS_ORIGIN` matching Vercel.
+4. Start with the HTTPS profile:
 
 ```bash
 docker compose pull
@@ -271,13 +384,15 @@ docker compose logs -f caddy
 ```
 
 5. Check `https://api.yourdomain.com/health`.
+6. Vercel: `NEXT_PUBLIC_API_URL=https://api.yourdomain.com` → redeploy.
 
-6. On Vercel, set `NEXT_PUBLIC_API_URL=https://api.yourdomain.com` and redeploy the frontend.
+Locally use `docker compose up -d` **without** `--profile https` (no domain / certs needed).
+
+---
 
 ## Notes
 
-- Source files (PDF / TEXT / VTT / YouTube transcripts) and generated podcast MP3s are stored in Supabase Storage.
-- Install backend deps with `--legacy-peer-deps` if npm reports LangChain optional-peer conflicts (an `.npmrc` is included).
-- Run `npx prisma migrate dev` only after `DATABASE_URL` / `DIRECT_URL` point at a real Neon database.
-- Frontend `README.md` is the stock Next.js file; use this root README for product setup.
-- Production HTTPS: `docker compose --profile https up -d` (needs root `.env` with `API_DOMAIN` + `ACME_EMAIL`).
+- Source binaries and podcast MP3s live in **Supabase Storage**.
+- Backend install may need `--legacy-peer-deps` (`.npmrc` sets this).
+- Run Prisma migrate only after Neon URLs are set.
+- Production HTTPS: `docker compose --profile https up -d`.

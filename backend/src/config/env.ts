@@ -13,7 +13,12 @@ const envSchema = z.object({
   OPENAI_API_KEY: z.string().optional(),
   CLERK_PUBLISHABLE_KEY: z.string().min(1, "CLERK_PUBLISHABLE_KEY is required"),
   CLERK_SECRET_KEY: z.string().min(1, "CLERK_SECRET_KEY is required"),
-  UPLOAD_DIR: z.string().default("uploads"),
+  /** Supabase project URL + service role key for Storage (server-side only). */
+  SUPABASE_URL: z.string().url("SUPABASE_URL must be a valid URL"),
+  SUPABASE_SERVICE_ROLE_KEY: z
+    .string()
+    .min(1, "SUPABASE_SERVICE_ROLE_KEY is required"),
+  SUPABASE_STORAGE_BUCKET: z.string().min(1).default("sources"),
   /** Comma-separated allowed frontends, e.g. https://app.vercel.app,http://localhost:3000 */
   CORS_ORIGIN: z
     .string()

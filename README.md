@@ -115,7 +115,9 @@ Copy the example files and fill in real values:
 | `OPENAI_API_KEY` | Embeddings + LLM |
 | `CLERK_PUBLISHABLE_KEY` / `CLERK_SECRET_KEY` | Backend JWT verify |
 | `CORS_ORIGIN` | Frontend origin (`http://localhost:3000`) |
-| `UPLOAD_DIR` | Local uploads folder (`uploads/`) |
+| `SUPABASE_URL` | Supabase project URL |
+| `SUPABASE_SERVICE_ROLE_KEY` | Service role key (server-only) |
+| `SUPABASE_STORAGE_BUCKET` | Storage bucket name (default `sources`) |
 
 ### `frontend/.env.local`
 
@@ -246,7 +248,7 @@ docker compose logs -f caddy
 
 ## Notes
 
-- Local uploads live in `backend/uploads/` (gitignored).
+- Source files (PDF / TEXT / VTT / YouTube transcripts) are stored in Supabase Storage.
 - Install backend deps with `--legacy-peer-deps` if npm reports LangChain optional-peer conflicts (an `.npmrc` is included).
 - Run `npx prisma migrate dev` only after `DATABASE_URL` / `DIRECT_URL` point at a real Neon database.
 - Frontend `README.md` is the stock Next.js file; use this root README for product setup.

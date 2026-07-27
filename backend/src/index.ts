@@ -1,8 +1,6 @@
 import { clerkMiddleware } from "@clerk/express";
 import cors from "cors";
 import express from "express";
-import fs from "node:fs";
-import path from "node:path";
 import { env } from "./config/env.js";
 import { ensureQdrantCollection } from "./lib/qdrant.js";
 import { errorHandler } from "./middleware/errorHandler.js";
@@ -32,11 +30,6 @@ console.log(`CORS allowed origins: ${corsOrigins.join(", ")}`);
 // Transcript payloads for long YouTube videos can exceed 2mb.
 app.use(express.json({ limit: "5mb" }));
 app.use(clerkMiddleware());
-
-const uploadDir = path.resolve(process.cwd(), env.UPLOAD_DIR);
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir, { recursive: true });
-}
 
 app.use(healthRouter);
 app.use("/api", meRouter);

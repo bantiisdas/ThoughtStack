@@ -1,10 +1,8 @@
-import fs from "node:fs/promises";
-import path from "node:path";
+import { downloadObjectText } from "../../lib/storage.js";
 import type { ExtractedDocument } from "./types.js";
 
 export async function extractText(storagePath: string): Promise<ExtractedDocument> {
-  const absolute = path.resolve(process.cwd(), storagePath);
-  const text = await fs.readFile(absolute, "utf8");
+  const text = await downloadObjectText(storagePath);
   if (!text.trim()) {
     throw new Error("Text file is empty");
   }

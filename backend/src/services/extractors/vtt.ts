@@ -1,6 +1,5 @@
 import { createRequire } from "node:module";
-import fs from "node:fs/promises";
-import path from "node:path";
+import { downloadObjectText } from "../../lib/storage.js";
 import type { ExtractedDocument, ExtractedSegment } from "./types.js";
 
 const require = createRequire(import.meta.url);
@@ -23,8 +22,7 @@ const webvtt = require("node-webvtt") as {
 export async function extractVtt(
   storagePath: string,
 ): Promise<ExtractedDocument> {
-  const absolute = path.resolve(process.cwd(), storagePath);
-  const raw = await fs.readFile(absolute, "utf8");
+  const raw = await downloadObjectText(storagePath);
   if (!raw.trim()) {
     throw new Error("VTT file is empty");
   }

@@ -1,5 +1,4 @@
-import fs from "node:fs";
-import path from "node:path";
+import { downloadObjectText } from "../../lib/storage.js";
 import type { ExtractedDocument, ExtractedSegment } from "./types.js";
 
 const YT_ID_RE =
@@ -102,13 +101,15 @@ export function documentFromYoutubeCues(
   };
 }
 
-function readStoredCues(storagePath: string): YoutubeCue[] {
-  const absolute = path.resolve(process.cwd(), storagePath);
-  if (!fs.existsSync(absolute)) {
+async function readStoredCues(storagePath: string): Promise<YoutubeCue[]> {
+  let rawJson: string;
+  try {
+    rawJson = await downloadObjectText(storagePath);
+  } catch {
     throw new Error(`Stored YouTube transcript missing at ${storagePath}`);
   }
 
-  const raw = JSON.parse(fs.readFileSync(absolute, "utf8")) as unknown;
+  const raw = JSON.parse(rawJson) as unknown;
   if (!Array.isArray(raw) || raw.length === 0) {
     throw new Error("Stored YouTube transcript is empty or invalid");
   }
@@ -141,6 +142,6 @@ export async function extractYoutube(
     );
   }
 
-  const cues = readStoredCues(storagePath);
+  const cues = await readStoredCues(storagePath);
   return documentFromYoutubeCues(url, cues);
 }

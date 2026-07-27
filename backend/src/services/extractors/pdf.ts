@@ -1,11 +1,9 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { PDFParse } from "pdf-parse";
+import { downloadObject } from "../../lib/storage.js";
 import type { ExtractedDocument, ExtractedSegment } from "./types.js";
 
 export async function extractPdf(storagePath: string): Promise<ExtractedDocument> {
-  const absolute = path.resolve(process.cwd(), storagePath);
-  const data = await fs.readFile(absolute);
+  const data = await downloadObject(storagePath);
 
   const parser = new PDFParse({ data });
   try {

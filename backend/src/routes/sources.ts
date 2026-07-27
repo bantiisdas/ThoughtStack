@@ -1,10 +1,8 @@
 import { Router } from "express";
-import fs from "node:fs";
 import path from "node:path";
 import multer from "multer";
 import { z } from "zod";
 import type { SourceType } from "@prisma/client";
-import { env } from "../config/env.js";
 import {
   MAX_FILE_BYTES,
   MAX_FILE_MB,
@@ -15,6 +13,12 @@ import { requireAuth } from "../middleware/auth.js";
 import { sourceWriteLimiter } from "../middleware/rateLimit.js";
 import { prisma } from "../lib/prisma.js";
 import { deletePointsBySourceId } from "../lib/qdrant.js";
+import {
+  deleteObject,
+  downloadObject,
+  objectKey,
+  uploadObject,
+} from "../lib/storage.js";
 import { enqueueSourceIndex } from "../queues/sourceIndex.js";
 import {
   buildSegmentRanges,
@@ -141,27 +145,26 @@ function defaultMimeForType(type: SourceType): string {
   }
 }
 
-/** Persist client-fetched YouTube cues under uploads/<notebookId>/. */
-function persistYoutubeTranscript(
+/** Persist client-fetched YouTube cues to Supabase Storage. */
+async function persistYoutubeTranscript(
   notebookId: string,
   sourceId: string,
   cues: YoutubeCue[],
-): string {
-  const notebookDir = path.resolve(process.cwd(), env.UPLOAD_DIR, notebookId);
-  fs.mkdirSync(notebookDir, { recursive: true });
-
+): Promise<string> {
   const filename = `${sourceId}-transcript.json`;
-  const absolutePath = path.join(notebookDir, filename);
-  const storagePath = path
-    .join(env.UPLOAD_DIR, notebookId, filename)
-    .replace(/\\/g, "/");
+  const storagePath = objectKey(notebookId, filename);
 
   const normalized: YoutubeCue[] = cues.map((c) => ({
     text: c.text,
     offset: c.offset,
     duration: c.duration,
   }));
-  fs.writeFileSync(absolutePath, JSON.stringify(normalized));
+
+  await uploadObject(
+    storagePath,
+    Buffer.from(JSON.stringify(normalized), "utf8"),
+    "application/json",
+  );
   return storagePath;
 }
 
@@ -260,13 +263,6 @@ sourcesRouter.post(
     });
 
     try {
-      const notebookDir = path.resolve(
-        process.cwd(),
-        env.UPLOAD_DIR,
-        notebookId,
-      );
-      fs.mkdirSync(notebookDir, { recursive: true });
-
       const safeName = file.originalname
         .replace(/[^\w.\-]+/g, "_")
         .slice(0, 80);
@@ -277,12 +273,10 @@ sourcesRouter.post(
             ? ".vtt"
             : path.extname(safeName) || ".txt";
       const filename = `${source.id}-${safeName || `source${ext}`}`;
-      const absolutePath = path.join(notebookDir, filename);
-      const storagePath = path
-        .join(env.UPLOAD_DIR, notebookId, filename)
-        .replace(/\\/g, "/");
+      const storagePath = objectKey(notebookId, filename);
+      const mime = file.mimetype || defaultMimeForType(type);
 
-      fs.writeFileSync(absolutePath, file.buffer);
+      await uploadObject(storagePath, file.buffer, mime);
 
       const updated = await prisma.source.update({
         where: { id: source.id },
@@ -402,7 +396,7 @@ sourcesRouter.post(
 
       if (type === "YOUTUBE" && transcript) {
         try {
-          const storagePath = persistYoutubeTranscript(
+          const storagePath = await persistYoutubeTranscript(
             notebookId,
             source.id,
             transcript,
@@ -563,7 +557,7 @@ sourcesRouter.get(
 );
 
 /**
- * GET /api/sources/:id/file — stream stored binary (PDF / TEXT / VTT uploads).
+ * GET /api/sources/:id/file — serve stored binary from Supabase Storage.
  */
 sourcesRouter.get(
   "/sources/:id/file",
@@ -583,9 +577,12 @@ sourcesRouter.get(
       return;
     }
 
-    const absolute = path.resolve(process.cwd(), source.storagePath);
-    if (!fs.existsSync(absolute)) {
-      res.status(404).json({ error: "Stored file is missing on disk" });
+    let fileBuffer: Buffer;
+    try {
+      fileBuffer = await downloadObject(source.storagePath);
+    } catch (error) {
+      console.error(`[sources] Supabase download failed for ${id}:`, error);
+      res.status(404).json({ error: "Stored file is missing in storage" });
       return;
     }
 
@@ -599,17 +596,8 @@ sourcesRouter.get(
       "Content-Disposition",
       `inline; filename="${downloadName.replace(/"/g, "")}"`,
     );
-
-    const stream = fs.createReadStream(absolute);
-    stream.on("error", (error) => {
-      console.error(`[sources] File stream failed for ${id}:`, error);
-      if (!res.headersSent) {
-        res.status(500).json({ error: "Failed to stream file" });
-      } else {
-        res.destroy(error);
-      }
-    });
-    stream.pipe(res);
+    res.setHeader("Content-Length", String(fileBuffer.length));
+    res.send(fileBuffer);
   },
 );
 
@@ -649,7 +637,7 @@ sourcesRouter.post(
     if (source.type === "YOUTUBE") {
       if (transcript?.length) {
         try {
-          const storagePath = persistYoutubeTranscript(
+          const storagePath = await persistYoutubeTranscript(
             source.notebookId,
             source.id,
             transcript,
@@ -723,13 +711,10 @@ sourcesRouter.delete(
     }
 
     if (source.storagePath) {
-      const absolute = path.resolve(process.cwd(), source.storagePath);
       try {
-        if (fs.existsSync(absolute)) {
-          fs.unlinkSync(absolute);
-        }
+        await deleteObject(source.storagePath);
       } catch (error) {
-        console.error(`[sources] File cleanup failed for ${id}:`, error);
+        console.error(`[sources] Storage cleanup failed for ${id}:`, error);
       }
     }
 

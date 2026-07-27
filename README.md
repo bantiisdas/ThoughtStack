@@ -346,21 +346,6 @@ docker compose up -d --build
 
 ---
 
-## Demo script (~5–8 min)
-
-1. Sign in at the app (local or [live demo](https://thought-stack-ai.vercel.app/)).
-2. Create a notebook.
-3. Add sources (PDF / text under 20 MB, and/or website / YouTube).
-4. Wait until status is **Ready**.
-5. Ask a grounded question → wait for the graded answer.
-6. Click citation chips → viewer opens at the locus.
-7. Optional: **Studio → Generate podcast** → play / download when Ready.
-8. Optional: fail a source → **Retry**; delete source / podcast / notebook.
-
-Talking points: step-back + rewrite + sub-queries, HyDE, RRF top-5, grade-and-retry (max 3), notebook isolation in Qdrant.
-
----
-
 ## Deploy API with HTTPS (Caddy)
 
 Vercel is HTTPS, so the API must be HTTPS too (no `http://IP:4000` — mixed content).

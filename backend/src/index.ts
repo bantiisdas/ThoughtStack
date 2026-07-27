@@ -29,7 +29,8 @@ app.use(
 );
 
 console.log(`CORS allowed origins: ${corsOrigins.join(", ")}`);
-app.use(express.json({ limit: "2mb" }));
+// Transcript payloads for long YouTube videos can exceed 2mb.
+app.use(express.json({ limit: "5mb" }));
 app.use(clerkMiddleware());
 
 const uploadDir = path.resolve(process.cwd(), env.UPLOAD_DIR);

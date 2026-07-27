@@ -76,10 +76,12 @@ services:
       - "443:443"
       - "443:443/udp"
     env_file:
-      - ./.env
+      - path: ./.env
+        required: false
     environment:
-      API_DOMAIN: ${API_DOMAIN:?Set API_DOMAIN in root .env for the https profile}
-      ACME_EMAIL: ${ACME_EMAIL:?Set ACME_EMAIL in root .env for the https profile}
+      # Only needed with: docker compose --profile https up -d
+      API_DOMAIN: ${API_DOMAIN:-localhost}
+      ACME_EMAIL: ${ACME_EMAIL:-dev@localhost}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data

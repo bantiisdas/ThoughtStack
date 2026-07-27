@@ -1,5 +1,6 @@
 import { ApiError, apiFetch, getApiUrl } from "./api";
 import type { SourceContentResponse, SourceSummary, SourceType } from "./types";
+import type { YoutubeTranscriptCue } from "./youtube";
 
 export async function uploadSourceFile(
   token: string,
@@ -40,6 +41,8 @@ export async function addUrlSource(
     url: string;
     type?: Extract<SourceType, "WEBSITE" | "YOUTUBE">;
     title?: string;
+    /** Required when type is YOUTUBE — cues from fetchYoutubeTranscript. */
+    transcript?: YoutubeTranscriptCue[];
   },
 ) {
   return apiFetch<{ source: SourceSummary }>(
@@ -58,12 +61,17 @@ export async function getSource(token: string, sourceId: string) {
   });
 }
 
-export async function reindexSource(token: string, sourceId: string) {
+export async function reindexSource(
+  token: string,
+  sourceId: string,
+  payload?: { transcript?: YoutubeTranscriptCue[] },
+) {
   return apiFetch<{ source: SourceSummary }>(
     `/api/sources/${sourceId}/reindex`,
     {
       token,
       method: "POST",
+      body: JSON.stringify(payload ?? {}),
     },
   );
 }

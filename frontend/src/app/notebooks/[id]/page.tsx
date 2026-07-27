@@ -34,6 +34,7 @@ import type {
   SourceStatus,
   SourceType,
 } from "@/lib/types";
+import { fetchYoutubeTranscript } from "@/lib/youtube";
 
 const IN_FLIGHT: SourceStatus[] = ["UPLOADING", "INDEXING"];
 const POLL_MS = 2500;
@@ -322,10 +323,14 @@ export default function NotebookWorkspacePage() {
         type = urlType;
       }
 
+      const transcript =
+        type === "YOUTUBE" ? await fetchYoutubeTranscript(url) : undefined;
+
       const { source } = await addUrlSource(token, notebook.id, {
         url,
         type,
         title: urlTitle.trim() || undefined,
+        transcript,
       });
       upsertSource(source);
       setUrlOpen(false);
@@ -341,12 +346,26 @@ export default function NotebookWorkspacePage() {
 
   async function handleReindex(sourceId: string) {
     if (busySourceId) return;
+    const existing = sources.find((s) => s.id === sourceId);
     setBusySourceId(sourceId);
     setError(null);
     try {
       const token = await getToken();
       if (!token) throw new Error("Not authenticated");
-      const { source } = await reindexSource(token, sourceId);
+
+      let transcript;
+      if (existing?.type === "YOUTUBE") {
+        if (!existing.url) {
+          throw new Error("YouTube source has no URL to refresh captions");
+        }
+        transcript = await fetchYoutubeTranscript(existing.url);
+      }
+
+      const { source } = await reindexSource(
+        token,
+        sourceId,
+        transcript ? { transcript } : undefined,
+      );
       upsertSource(source);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to reindex source");

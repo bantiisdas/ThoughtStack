@@ -41,7 +41,7 @@ export async function extractSource(
     }
     case "YOUTUBE": {
       if (!source.url) throw new Error("YOUTUBE source has no url");
-      return extractYoutube(source.url);
+      return extractYoutube(source.url, source.storagePath);
     }
     default: {
       const exhaustive: never = source.type;

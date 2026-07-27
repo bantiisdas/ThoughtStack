@@ -20,7 +20,10 @@ import {
   buildSegmentRanges,
   extractSource,
 } from "../services/extractors/index.js";
-import { extractYoutubeVideoId } from "../services/extractors/youtube.js";
+import {
+  extractYoutubeVideoId,
+  type YoutubeCue,
+} from "../services/extractors/youtube.js";
 
 export const sourcesRouter = Router();
 
@@ -39,10 +42,23 @@ const sourceSelect = {
   notebookId: true,
 } as const;
 
+const youtubeCueSchema = z.object({
+  text: z.string(),
+  offset: z.number().finite(),
+  duration: z.number().finite(),
+  lang: z.string().optional(),
+});
+
 const urlBodySchema = z.object({
   type: z.enum(["WEBSITE", "YOUTUBE"]).optional(),
   url: z.string().trim().url("A valid URL is required"),
   title: z.string().trim().max(200).optional(),
+  /** Required for YOUTUBE — fetched client-side (datacenter IPs are blocked). */
+  transcript: z.array(youtubeCueSchema).min(1).max(50_000).optional(),
+});
+
+const reindexBodySchema = z.object({
+  transcript: z.array(youtubeCueSchema).min(1).max(50_000).optional(),
 });
 
 function paramId(value: string | string[]): string {
@@ -118,9 +134,35 @@ function defaultMimeForType(type: SourceType): string {
       return "text/vtt";
     case "TEXT":
       return "text/plain";
+    case "YOUTUBE":
+      return "application/json";
     default:
       return "application/octet-stream";
   }
+}
+
+/** Persist client-fetched YouTube cues under uploads/<notebookId>/. */
+function persistYoutubeTranscript(
+  notebookId: string,
+  sourceId: string,
+  cues: YoutubeCue[],
+): string {
+  const notebookDir = path.resolve(process.cwd(), env.UPLOAD_DIR, notebookId);
+  fs.mkdirSync(notebookDir, { recursive: true });
+
+  const filename = `${sourceId}-transcript.json`;
+  const absolutePath = path.join(notebookDir, filename);
+  const storagePath = path
+    .join(env.UPLOAD_DIR, notebookId, filename)
+    .replace(/\\/g, "/");
+
+  const normalized: YoutubeCue[] = cues.map((c) => ({
+    text: c.text,
+    offset: c.offset,
+    duration: c.duration,
+  }));
+  fs.writeFileSync(absolutePath, JSON.stringify(normalized));
+  return storagePath;
 }
 
 const upload = multer({
@@ -268,7 +310,8 @@ sourcesRouter.post(
 
 /**
  * POST /api/notebooks/:id/sources/url
- * Body: { type?: "WEBSITE" | "YOUTUBE", url, title? }
+ * Body: { type?: "WEBSITE" | "YOUTUBE", url, title?, transcript? }
+ * YOUTUBE requires transcript cues fetched by the frontend.
  * Type is inferred from the URL when omitted.
  */
 sourcesRouter.post(
@@ -298,7 +341,7 @@ sourcesRouter.post(
       return;
     }
 
-    const { url, title: titleInput } = parsed.data;
+    const { url, title: titleInput, transcript } = parsed.data;
     let type = parsed.data.type;
 
     if (!type) {
@@ -307,6 +350,14 @@ sourcesRouter.post(
 
     if (type === "YOUTUBE" && !looksLikeYoutube(url)) {
       res.status(400).json({ error: "URL does not look like a YouTube video" });
+      return;
+    }
+
+    if (type === "YOUTUBE" && (!transcript || transcript.length === 0)) {
+      res.status(400).json({
+        error:
+          "YouTube sources require a transcript fetched by the client (transcript cues missing)",
+      });
       return;
     }
 
@@ -343,13 +394,46 @@ sourcesRouter.post(
           type,
           title,
           url: normalizedUrl,
-          status: "INDEXING",
+          mimeType: type === "YOUTUBE" ? "application/json" : null,
+          status: type === "YOUTUBE" ? "UPLOADING" : "INDEXING",
         },
         select: sourceSelect,
       });
 
-      await enqueueSourceIndex(source.id);
+      if (type === "YOUTUBE" && transcript) {
+        try {
+          const storagePath = persistYoutubeTranscript(
+            notebookId,
+            source.id,
+            transcript,
+          );
+          const updated = await prisma.source.update({
+            where: { id: source.id },
+            data: {
+              storagePath,
+              status: "INDEXING",
+            },
+            select: sourceSelect,
+          });
 
+          await enqueueSourceIndex(source.id);
+          res.status(201).json({ source: updated });
+          return;
+        } catch (error) {
+          const message =
+            error instanceof Error
+              ? error.message
+              : "Failed to save YouTube transcript";
+          await prisma.source.update({
+            where: { id: source.id },
+            data: { status: "FAILED", errorMessage: message.slice(0, 1000) },
+          });
+          res.status(500).json({ error: message });
+          return;
+        }
+      }
+
+      await enqueueSourceIndex(source.id);
       res.status(201).json({ source });
     } catch (error) {
       const message =
@@ -531,6 +615,7 @@ sourcesRouter.get(
 
 /**
  * POST /api/sources/:id/reindex — clear vectors/chunks via worker and re-run ingest.
+ * Body (optional): { transcript } — refresh stored YouTube cues before reindex.
  */
 sourcesRouter.post(
   "/sources/:id/reindex",
@@ -548,6 +633,57 @@ sourcesRouter.post(
         error: `Cannot reindex while source is ${source.status}`,
       });
       return;
+    }
+
+    const parsed = reindexBodySchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      res.status(400).json({
+        error: "Validation failed",
+        details: parsed.error.flatten().fieldErrors,
+      });
+      return;
+    }
+
+    const { transcript } = parsed.data;
+
+    if (source.type === "YOUTUBE") {
+      if (transcript?.length) {
+        try {
+          const storagePath = persistYoutubeTranscript(
+            source.notebookId,
+            source.id,
+            transcript,
+          );
+          const updated = await prisma.source.update({
+            where: { id },
+            data: {
+              storagePath,
+              mimeType: "application/json",
+              status: "INDEXING",
+              errorMessage: null,
+            },
+            select: sourceSelect,
+          });
+          await enqueueSourceIndex(id);
+          res.json({ source: updated });
+          return;
+        } catch (error) {
+          const message =
+            error instanceof Error
+              ? error.message
+              : "Failed to save YouTube transcript";
+          res.status(500).json({ error: message });
+          return;
+        }
+      }
+
+      if (!source.storagePath) {
+        res.status(400).json({
+          error:
+            "YouTube source has no stored transcript; provide transcript cues to reindex",
+        });
+        return;
+      }
     }
 
     const updated = await prisma.source.update({

@@ -1,8 +1,15 @@
-import { fetchTranscript } from "youtube-transcript";
+import fs from "node:fs";
+import path from "node:path";
 import type { ExtractedDocument, ExtractedSegment } from "./types.js";
 
 const YT_ID_RE =
   /(?:youtube\.com\/(?:watch\?.*?v=|embed\/|shorts\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/;
+
+export type YoutubeCue = {
+  text: string;
+  offset: number;
+  duration: number;
+};
 
 export function extractYoutubeVideoId(urlOrId: string): string {
   const trimmed = urlOrId.trim();
@@ -31,7 +38,7 @@ export function extractYoutubeVideoId(urlOrId: string): string {
 function normalizeCueTimes(
   cues: Array<{ offset: number; duration: number }>,
 ): "seconds" | "ms" {
-  // youtube-transcript returns ms for InnerTube/srv3 and seconds for classic XML.
+  // Client libraries may return ms (InnerTube/srv3) or seconds (classic XML).
   if (cues.length === 0) return "ms";
   const allSmallDuration = cues.every((c) => c.duration < 100);
   const hasFractional = cues.some(
@@ -40,20 +47,13 @@ function normalizeCueTimes(
   return allSmallDuration || hasFractional ? "seconds" : "ms";
 }
 
-export async function extractYoutube(url: string): Promise<ExtractedDocument> {
+/** Build an ExtractedDocument from client-supplied caption cues. */
+export function documentFromYoutubeCues(
+  url: string,
+  cues: YoutubeCue[],
+): ExtractedDocument {
   const videoId = extractYoutubeVideoId(url);
   const watchUrl = `https://www.youtube.com/watch?v=${videoId}`;
-
-  let cues: Array<{ text: string; offset: number; duration: number }>;
-  try {
-    cues = await fetchTranscript(videoId);
-  } catch (error) {
-    const message =
-      error instanceof Error
-        ? error.message
-        : "Failed to fetch YouTube transcript";
-    throw new Error(`YouTube captions unavailable for ${videoId}: ${message}`);
-  }
 
   if (!cues.length) {
     throw new Error(`No captions found for YouTube video ${videoId}`);
@@ -100,4 +100,47 @@ export async function extractYoutube(url: string): Promise<ExtractedDocument> {
       charCount: text.length,
     },
   };
+}
+
+function readStoredCues(storagePath: string): YoutubeCue[] {
+  const absolute = path.resolve(process.cwd(), storagePath);
+  if (!fs.existsSync(absolute)) {
+    throw new Error(`Stored YouTube transcript missing at ${storagePath}`);
+  }
+
+  const raw = JSON.parse(fs.readFileSync(absolute, "utf8")) as unknown;
+  if (!Array.isArray(raw) || raw.length === 0) {
+    throw new Error("Stored YouTube transcript is empty or invalid");
+  }
+
+  return raw.map((item, index) => {
+    if (
+      !item ||
+      typeof item !== "object" ||
+      typeof (item as YoutubeCue).text !== "string" ||
+      typeof (item as YoutubeCue).offset !== "number" ||
+      typeof (item as YoutubeCue).duration !== "number"
+    ) {
+      throw new Error(`Invalid cue at index ${index} in stored transcript`);
+    }
+    return item as YoutubeCue;
+  });
+}
+
+/**
+ * Extract from a client-uploaded transcript JSON file.
+ * Live YouTube fetches are intentionally not done here (datacenter IPs are blocked).
+ */
+export async function extractYoutube(
+  url: string,
+  storagePath?: string | null,
+): Promise<ExtractedDocument> {
+  if (!storagePath) {
+    throw new Error(
+      "YouTube source has no stored transcript; re-add the video from the app",
+    );
+  }
+
+  const cues = readStoredCues(storagePath);
+  return documentFromYoutubeCues(url, cues);
 }

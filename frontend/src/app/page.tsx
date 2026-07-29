@@ -51,9 +51,6 @@ export default function Home() {
             </Link>
           </Show>
         </div>
-        <p className="mt-8 text-xs text-[#78716c]">
-          API: {process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000"}
-        </p>
       </section>
     </main>
   );

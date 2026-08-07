@@ -58,6 +58,8 @@ ThoughtStack/
 ```
 
 ---
+Todo: Fix YouTube transcript fetching issue 
+---
 
 ## Architecture
 
